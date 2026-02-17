@@ -67,7 +67,7 @@ const Home: React.FC = () => {
     return (
         <Container maxWidth="sm" sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1.5, sm: 3 } }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-                <Typography variant="h4" sx={{ color: 'primary.dark', fontWeight: 800 }}>ABC Gift</Typography>
+                <Typography variant="h4" sx={{ color: 'primary.dark', fontWeight: 800 }}>ABC Dates</Typography>
                 <Box>
                     <IconButton onClick={() => navigate('/history')}><HistoryIcon color="primary" /></IconButton>
                     <IconButton onClick={() => navigate('/settings')}><SettingsIcon color="primary" /></IconButton>
