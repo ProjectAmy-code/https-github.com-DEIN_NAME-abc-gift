@@ -16,14 +16,15 @@ export const aiService = {
             try {
                 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-                const prompt = `Du bist ein Date-Planer für Paare. 
-                Schlage 5 kreative, romantische oder lustige Aktivitäten vor, die mit dem Buchstaben "${letterKey}" beginnen (auf Deutsch).
-                Präferenzen:
-                - Indoor: ${settings.activityFilters.indoor ? 'Erlaubt' : 'Nicht erwünscht'}
-                - Outdoor: ${settings.activityFilters.outdoor ? 'Erlaubt' : 'Nicht erwünscht'}
-                - Zeit: ${settings.timePreference}
+                const prompt = `Antworte als kreativer Date-Planer für Paare.
+                Vorschlag: 5 Date-Ideen, die mit dem Buchstaben "${letterKey}" beginnen.
                 
-                Antworte NUR mit einer JSON-Liste von 5 Strings, kein Text davor oder danach. Beispiel: ["Aktion 1", "Aktion 2", ...]`;
+                STRIKTE REGELN:
+                - Sprache: Deutsch
+                - Länge: NUR EIN EINZIGES WORT pro Idee (max 2 Wörter wenn nötig).
+                - Fokus: Das Wort MUSS zwingend mit "${letterKey}" beginnen.
+                - Format: NUR eine JSON-Liste von Strings, z.B. ["${letterKey}...", "${letterKey}...", ...]. Kein Text davor oder danach.
+                - Präferenzen: Indoor: ${settings.activityFilters.indoor ? 'JA' : 'NEIN'}, Outdoor: ${settings.activityFilters.outdoor ? 'JA' : 'NEIN'}.`;
 
                 const result = await model.generateContent(prompt);
                 const responseText = result.response.text();
