@@ -19,6 +19,10 @@ const generateInitialRounds = (startingPerson: UserID): LetterRound[] => {
         letter,
         proposerUserId: index % 2 === 0 ? startingPerson : (startingPerson === 'mauro' ? 'giorgia' : 'mauro'),
         status: RoundStatus.NotStarted,
+        proposalText: '',
+        notes: '',
+        date: '',
+        rating: 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     }));

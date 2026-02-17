@@ -22,6 +22,7 @@ export interface LetterRound {
     date?: string;
     status: RoundStatus;
     notes?: string;
+    rating?: number;
     createdAt: string;
     updatedAt: string;
 }
