@@ -19,7 +19,7 @@ const Login: React.FC = () => {
         setLoading(true);
 
         try {
-            await signInWithEmailAndPassword(auth, email, password);
+            await signInWithEmailAndPassword(auth, email.trim(), password);
             navigate('/');
         } catch (err: any) {
             console.error('Full Login Error:', err);

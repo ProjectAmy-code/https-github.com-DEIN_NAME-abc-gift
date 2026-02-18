@@ -5,6 +5,7 @@ import { DatePicker } from '@mui/x-date-pickers';
 import { ArrowBack as ArrowBackIcon, AutoFixHigh as AutoFixHighIcon, Delete as DeleteIcon, Save as SaveIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon } from '@mui/icons-material';
 import { storage } from '../storage';
 import { aiService } from '../services/aiService';
+import { useAuth } from '../context/useAuth';
 import type { LetterRound } from '../types';
 import { RoundStatus } from '../types';
 import { parseISO } from 'date-fns';
@@ -13,8 +14,8 @@ import { debounce } from 'lodash';
 const getStatusLabel = (status: RoundStatus) => {
     switch (status) {
         case RoundStatus.Done: return 'Erledigt';
-        case RoundStatus.Confirmed: return 'Bestätigt';
-        case RoundStatus.Proposed: return 'Vorgeschlagen';
+        case RoundStatus.Planned: return 'Geplant';
+        case RoundStatus.Draft: return 'Entwurf';
         default: return 'Nicht gestartet';
     }
 };
@@ -22,9 +23,10 @@ const getStatusLabel = (status: RoundStatus) => {
 const LetterDetail: React.FC = () => {
     const { letter } = useParams<{ letter: string }>();
     const navigate = useNavigate();
+    const { profile, environment, loading: authLoading } = useAuth();
     const [round, setRound] = useState<LetterRound | null>(null);
     const [loadingAI, setLoadingAI] = useState(false);
-    const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+    const [aiSuggestions, setAiSuggestions] = useState<{ title: string; description: string }[]>([]);
     const [showAiDialog, setShowAiDialog] = useState(false);
 
     // Local states for instant feedback
@@ -32,8 +34,8 @@ const LetterDetail: React.FC = () => {
     const [localNotes, setLocalNotes] = useState('');
 
     useEffect(() => {
-        if (letter) {
-            storage.getRounds().then(rounds => {
+        if (letter && environment?.id) {
+            storage.getRounds(environment.id).then(rounds => {
                 const found = rounds.find(r => r.letter === letter);
                 if (found) {
                     setRound(found);
@@ -42,16 +44,23 @@ const LetterDetail: React.FC = () => {
                 }
             });
         }
-    }, [letter]);
+    }, [letter, environment]);
+
+    const getDisplayName = (email: string) => {
+        if (!environment) return email;
+        const normalizedEmail = email.toLowerCase().replace(/\./g, '_');
+        return environment.memberNames[normalizedEmail] || email;
+    };
 
     // Debounced storage update
     const debouncedUpdate = useCallback(
         debounce(async (letter: string, updates: Partial<LetterRound>) => {
-            const allRounds = await storage.getRounds();
+            if (!environment) return;
+            const allRounds = await storage.getRounds(environment.id);
             const newRounds = allRounds.map(r => r.letter === letter ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r);
-            await storage.saveRounds(newRounds);
+            await storage.saveRounds(environment.id, newRounds);
         }, 800),
-        []
+        [environment]
     );
 
     const handleTextChange = (field: 'proposalText' | 'notes', value: string) => {
@@ -59,7 +68,7 @@ const LetterDetail: React.FC = () => {
 
         if (field === 'proposalText') {
             setLocalProposal(value);
-            const status = value ? RoundStatus.Proposed : RoundStatus.NotStarted;
+            const status = value ? RoundStatus.Draft : RoundStatus.NotStarted;
             setRound({ ...round, proposalText: value, status });
             debouncedUpdate(letter, { proposalText: value, status });
         } else {
@@ -70,31 +79,36 @@ const LetterDetail: React.FC = () => {
     };
 
     const updateRoundImmediate = async (updates: Partial<LetterRound>) => {
-        if (!round || !letter) return;
-        const allRounds = await storage.getRounds();
+        if (!round || !letter || !environment) return;
+        const allRounds = await storage.getRounds(environment.id);
         const newRounds = allRounds.map(r => r.letter === letter ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r);
-        await storage.saveRounds(newRounds);
+        await storage.saveRounds(environment.id, newRounds);
         setRound({ ...round, ...updates });
         if (updates.proposalText !== undefined) setLocalProposal(updates.proposalText);
         if (updates.notes !== undefined) setLocalNotes(updates.notes);
     };
 
     const handleAiGenerate = async () => {
-        if (!letter) return;
+        if (!letter || !environment) return;
         setLoadingAI(true);
-        const ideas = await aiService.generateIdeas(letter);
+        const ideas = await aiService.generateIdeas(environment.id, letter);
         setAiSuggestions(ideas);
         setLoadingAI(false);
     };
 
-    const selectSuggestion = (text: string) => {
-        updateRoundImmediate({ proposalText: text, status: RoundStatus.Proposed });
+    const selectSuggestion = (suggestion: { title: string; description: string }) => {
+        updateRoundImmediate({
+            proposalText: suggestion.title,
+            notes: suggestion.description ? `${localNotes}\n\n${suggestion.description}`.trim() : localNotes,
+            status: RoundStatus.Draft
+        });
         setShowAiDialog(false);
     };
 
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
     const handleDelete = async () => {
+        if (!environment || !letter) return;
         const cleanState: Partial<LetterRound> = {
             proposalText: '',
             date: '',
@@ -104,9 +118,9 @@ const LetterDetail: React.FC = () => {
             updatedAt: new Date().toISOString()
         };
 
-        const allRounds = await storage.getRounds();
+        const allRounds = await storage.getRounds(environment.id);
         const newRounds = allRounds.map(r => r.letter === letter ? { ...r, ...cleanState } : r);
-        await storage.saveRounds(newRounds);
+        await storage.saveRounds(environment.id, newRounds);
 
         setRound(prev => prev ? { ...prev, ...cleanState } : null);
         setLocalProposal('');
@@ -115,9 +129,23 @@ const LetterDetail: React.FC = () => {
         navigate('/');
     };
 
-    if (!round) return null;
+    if (authLoading) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+                <CircularProgress />
+            </Box>
+        );
+    }
+
+    if (!round || !environment) return null;
+
+    const isAdmin = profile?.email?.toLowerCase().trim() === environment.adminEmail?.toLowerCase().trim();
+    const isProposer = profile?.email?.toLowerCase().trim() === round.proposerUserId?.toLowerCase().trim();
+    const isDone = round.status === RoundStatus.Done;
 
     const canConfirm = round.proposalText && round.date;
+    const canEdit = isProposer && !isDone;
+    const canDelete = isDone ? isAdmin : isProposer;
 
     return (
         <Container maxWidth="sm" sx={{ py: { xs: 2, sm: 4 } }}>
@@ -144,7 +172,7 @@ const LetterDetail: React.FC = () => {
                         <Box textAlign="right">
                             <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>An der Reihe</Typography>
                             <Typography variant="subtitle1" sx={{ color: 'primary.main' }}>
-                                {round.proposerUserId === 'mauro' ? 'Mauro' : 'Giorgia'}
+                                {getDisplayName(round.proposerUserId)}
                             </Typography>
                         </Box>
                     </Box>
@@ -158,6 +186,7 @@ const LetterDetail: React.FC = () => {
                                 value={localProposal}
                                 onChange={(e) => handleTextChange('proposalText', e.target.value)}
                                 variant="outlined"
+                                disabled={!canEdit}
                                 InputProps={{
                                     sx: { borderRadius: 3 }
                                 }}
@@ -167,6 +196,7 @@ const LetterDetail: React.FC = () => {
                                 onClick={() => setShowAiDialog(true)}
                                 sx={{ mt: 1, fontWeight: 700 }}
                                 color="secondary"
+                                disabled={!canEdit}
                             >
                                 KI: Ideen generieren
                             </Button>
@@ -176,6 +206,7 @@ const LetterDetail: React.FC = () => {
                             label="Datum wählen"
                             value={round.date ? parseISO(round.date) : null}
                             onChange={(newDate) => updateRoundImmediate({ date: newDate ? newDate.toISOString() : undefined })}
+                            disabled={!canEdit}
                             slotProps={{
                                 textField: {
                                     fullWidth: true,
@@ -192,6 +223,7 @@ const LetterDetail: React.FC = () => {
                             label="Notizen (Optional)"
                             value={localNotes}
                             onChange={(e) => handleTextChange('notes', e.target.value)}
+                            disabled={!canEdit}
                             InputProps={{
                                 sx: { borderRadius: 3 }
                             }}
@@ -206,10 +238,10 @@ const LetterDetail: React.FC = () => {
                     fullWidth
                     size="large"
                     startIcon={<SaveIcon />}
-                    disabled={!canConfirm || round.status === RoundStatus.Confirmed || round.status === RoundStatus.Done}
-                    onClick={() => updateRoundImmediate({ status: RoundStatus.Confirmed })}
+                    disabled={!canEdit || !canConfirm || round.status === RoundStatus.Planned}
+                    onClick={() => updateRoundImmediate({ status: RoundStatus.Planned })}
                 >
-                    Vorschlag bestätigen
+                    Planung abschließen
                 </Button>
                 <Button
                     variant="outlined"
@@ -217,7 +249,7 @@ const LetterDetail: React.FC = () => {
                     size="large"
                     color="success"
                     startIcon={<CheckCircleIcon />}
-                    disabled={round.status !== RoundStatus.Confirmed}
+                    disabled={round.status !== RoundStatus.Planned || (profile?.email?.toLowerCase().trim() !== round.proposerUserId?.toLowerCase().trim())}
                     onClick={() => updateRoundImmediate({ status: RoundStatus.Done })}
                 >
                     Als erledigt markieren
@@ -226,23 +258,126 @@ const LetterDetail: React.FC = () => {
                 {round.status === RoundStatus.Done && (
                     <Card sx={{ mb: 3 }}>
                         <CardContent>
-                            <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>Bewertung</Typography>
-                            <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                                {[1, 2, 3, 4, 5].map((star) => (
-                                    <IconButton
-                                        key={star}
-                                        onClick={() => updateRoundImmediate({ rating: star })}
-                                        sx={{ color: round.rating && round.rating >= star ? '#FFD700' : 'grey.300' }}
-                                    >
-                                        {round.rating && round.rating >= star ? <StarIcon /> : <StarOutlineIcon />}
-                                    </IconButton>
-                                ))}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+                                <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>Bewertungen</Typography>
+                                {round.status === RoundStatus.Done && profile && !round.ratings?.[profile.email.toLowerCase().trim()] && (
+                                    <Chip
+                                        label="Bitte bewerten!"
+                                        color="warning"
+                                        size="small"
+                                        sx={{
+                                            fontWeight: 800,
+                                            height: 20,
+                                            fontSize: '0.65rem',
+                                            animation: 'pulse 2s infinite',
+                                            '@keyframes pulse': {
+                                                '0%': { transform: 'scale(1)', opacity: 1 },
+                                                '50%': { transform: 'scale(1.05)', opacity: 0.8 },
+                                                '100%': { transform: 'scale(1)', opacity: 1 },
+                                            },
+                                        }}
+                                    />
+                                )}
                             </Box>
+
+                            {/* Average Rating Display */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 1, mb: 3 }}>
+                                <Box sx={{ display: 'flex' }}>
+                                    {[1, 2, 3, 4, 5].map((star) => {
+                                        const avg = round.rating || 0;
+                                        const isHalf = avg >= star - 0.75 && avg < star - 0.25;
+                                        const isFull = avg >= star - 0.25;
+                                        return (
+                                            <StarIcon
+                                                key={star}
+                                                sx={{
+                                                    color: isFull ? '#FFD700' : isHalf ? '#FFD700' : 'grey.300',
+                                                    opacity: isFull ? 1 : isHalf ? 0.7 : 1
+                                                }}
+                                            />
+                                        );
+                                    })}
+                                </Box>
+                                <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                                    {round.rating ? round.rating.toFixed(1) : '0.0'}
+                                </Typography>
+                            </Box>
+
+                            <Divider sx={{ mb: 2 }} />
+
+                            {/* Individual Ratings List */}
+                            <Typography variant="subtitle2" gutterBottom>Mitglieder Bewertungen</Typography>
+                            <List disablePadding>
+                                {environment.memberEmails.map((email: string) => {
+                                    const rating = round.ratings?.[email.toLowerCase().trim()];
+                                    const isMe = email.toLowerCase().trim() === profile?.email?.toLowerCase().trim();
+                                    return (
+                                        <ListItem
+                                            key={email}
+                                            disableGutters
+                                            sx={{
+                                                py: 1,
+                                                px: isMe ? 1.5 : 0,
+                                                borderRadius: 2,
+                                                ...(isMe && {
+                                                    bgcolor: 'action.hover',
+                                                    border: rating ? '1px solid transparent' : '1px solid #ffd70044',
+                                                    mb: 0.5,
+                                                    transition: 'all 0.2s ease-in-out'
+                                                })
+                                            }}
+                                        >
+                                            <ListItemText
+                                                primary={getDisplayName(email)}
+                                                secondary={isMe ? "(Deine Bewertung)" : undefined}
+                                                primaryTypographyProps={{ variant: 'body2', fontWeight: isMe ? 700 : 500 }}
+                                                secondaryTypographyProps={{ variant: 'caption', sx: { color: isMe ? 'primary.main' : 'text.secondary' } }}
+                                            />
+                                            <Box sx={{ display: 'flex' }}>
+                                                {[1, 2, 3, 4, 5].map((star) => (
+                                                    <IconButton
+                                                        key={star}
+                                                        size={isMe ? "medium" : "small"}
+                                                        disabled={!isMe}
+                                                        onClick={() => {
+                                                            const currentRatings: Record<string, number> = round.ratings || {};
+                                                            const newRatings: Record<string, number> = {
+                                                                ...currentRatings,
+                                                                [email.toLowerCase().trim()]: star
+                                                            };
+                                                            const allRatings = Object.values(newRatings);
+                                                            const newAvg = allRatings.reduce((acc: number, val: number) => acc + val, 0) / allRatings.length;
+                                                            updateRoundImmediate({
+                                                                ratings: newRatings,
+                                                                rating: newAvg
+                                                            });
+                                                        }}
+                                                        sx={{
+                                                            p: isMe ? 0.5 : 0.2,
+                                                            color: rating && rating >= star ? '#FFD700' : 'grey.300',
+                                                            '&:hover': isMe ? {
+                                                                color: '#FFD700',
+                                                                transform: 'scale(1.2)'
+                                                            } : {}
+                                                        }}
+                                                    >
+                                                        {rating && rating >= star ? (
+                                                            <StarIcon fontSize={isMe ? "medium" : "small"} />
+                                                        ) : (
+                                                            <StarOutlineIcon fontSize={isMe ? "medium" : "small"} />
+                                                        )}
+                                                    </IconButton>
+                                                ))}
+                                            </Box>
+                                        </ListItem>
+                                    );
+                                })}
+                            </List>
                         </CardContent>
                     </Card>
                 )}
 
-                {round.status === RoundStatus.Done && (
+                {canDelete && (
                     <Button color="error" startIcon={<DeleteIcon />} onClick={() => setShowDeleteDialog(true)} sx={{ mt: 1 }}>
                         Eintrag löschen
                     </Button>
@@ -262,7 +397,7 @@ const LetterDetail: React.FC = () => {
                 </DialogActions>
             </Dialog>
 
-            <Dialog open={showAiDialog} onClose={() => setShowAiDialog(false)} fullWidth maxWidth="xs" PaperProps={{ sx: { borderRadius: 4 } }}>
+            <Dialog open={showAiDialog} onClose={() => setShowAiDialog(false)} fullWidth maxWidth="xs" PaperProps={{ sx: { borderRadius: 3 } }}>
                 <DialogTitle sx={{ fontWeight: 700 }}>KI Aktivitäts-Assistent</DialogTitle>
                 <DialogContent>
                     <Button
@@ -287,7 +422,12 @@ const LetterDetail: React.FC = () => {
                             {aiSuggestions.map((suggestion, idx) => (
                                 <ListItem disablePadding key={idx}>
                                     <ListItemButton onClick={() => selectSuggestion(suggestion)} sx={{ borderRadius: 2 }}>
-                                        <ListItemText primary={suggestion} primaryTypographyProps={{ fontWeight: 500 }} />
+                                        <ListItemText
+                                            primary={suggestion.title}
+                                            secondary={suggestion.description}
+                                            primaryTypographyProps={{ fontWeight: 600 }}
+                                            secondaryTypographyProps={{ variant: 'caption' }}
+                                        />
                                     </ListItemButton>
                                 </ListItem>
                             ))}

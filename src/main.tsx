@@ -15,6 +15,8 @@ import Login from './screens/Login'
 import Register from './screens/Register'
 import ForgotPassword from './screens/ForgotPassword'
 import VerifyEmail from './screens/VerifyEmail'
+import Welcome from './screens/Welcome'
+import Onboarding from './screens/Onboarding'
 import { AuthProvider } from './context/AuthProvider'
 import { AuthGuard } from './components/AuthGuard'
 import './index.css'
@@ -32,6 +34,8 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/verify-email" element={<VerifyEmail />} />
+                <Route path="/welcome" element={<AuthGuard><Welcome /></AuthGuard>} />
+                <Route path="/onboarding" element={<AuthGuard><Onboarding /></AuthGuard>} />
                 <Route path="/" element={<AuthGuard><Home /></AuthGuard>} />
                 <Route path="/letter/:letter" element={<AuthGuard><LetterDetail /></AuthGuard>} />
                 <Route path="/history" element={<AuthGuard><History /></AuthGuard>} />

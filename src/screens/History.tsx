@@ -3,35 +3,54 @@ import { Container, Typography, Card, List, ListItem, ListItemText, Box, Divider
 import { Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { storage } from '../storage';
+import { useAuth } from '../context/useAuth';
 import type { LetterRound } from '../types';
 import { RoundStatus } from '../types';
 
 const History: React.FC = () => {
+    const { profile, environment, loading: authLoading } = useAuth();
     const [rounds, setRounds] = useState<LetterRound[]>([]);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const navigate = useNavigate();
 
+    const isAdmin = profile?.email?.toLowerCase().trim() === environment?.adminEmail?.toLowerCase().trim();
+
     const loadRounds = async () => {
-        const rs = await storage.getRounds();
+        if (!environment) return;
+        const rs = await storage.getRounds(environment.id);
         setRounds(rs.filter(r => r.status === RoundStatus.Done));
     };
 
     useEffect(() => {
         loadRounds();
-    }, []);
+    }, [environment]);
+
+    const getDisplayName = (email: string) => {
+        if (!environment) return email;
+        const normalizedEmail = email.toLowerCase().replace(/\./g, '_');
+        return environment.memberNames[normalizedEmail] || email;
+    };
 
     const handleDelete = async () => {
-        if (!deleteConfirm) return;
-        const allRounds = await storage.getRounds();
+        if (!deleteConfirm || !environment) return;
+        const allRounds = await storage.getRounds(environment.id);
         const newRounds = allRounds.map(r =>
             r.letter === deleteConfirm
                 ? { ...r, status: RoundStatus.NotStarted, proposalText: '', date: undefined, notes: '', updatedAt: new Date().toISOString() }
                 : r
         );
-        await storage.saveRounds(newRounds);
+        await storage.saveRounds(environment.id, newRounds);
         setDeleteConfirm(null);
         await loadRounds();
     };
+
+    if (authLoading) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+                <Typography color="text.secondary">Lade Verlauf...</Typography>
+            </Box>
+        );
+    }
 
     if (rounds.length === 0) {
         return (
@@ -67,7 +86,7 @@ const History: React.FC = () => {
                                                 <Typography variant="body1" sx={{ fontWeight: 500 }}>{round.proposalText}</Typography>
                                             </Box>
                                         }
-                                        secondary={`${round.date ? new Date(round.date).toLocaleDateString('de-DE') : 'Kein Datum'} • Von ${round.proposerUserId === 'mauro' ? 'Mauro' : 'Giorgia'}`}
+                                        secondary={`${round.date ? new Date(round.date).toLocaleDateString('de-DE') : 'Kein Datum'} • Von ${getDisplayName(round.proposerUserId)}`}
                                         sx={{ m: 0, width: '100%' }}
                                     />
                                     <Box sx={{
@@ -78,13 +97,15 @@ const History: React.FC = () => {
                                         width: { xs: '100%', sm: 'auto' },
                                         justifyContent: { xs: 'flex-end', sm: 'center' }
                                     }}>
-                                        <IconButton
-                                            size="small"
-                                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(round.letter); }}
-                                            sx={{ bgcolor: 'error.container', color: 'error.main', '&:hover': { bgcolor: 'error.light' } }}
-                                        >
-                                            <DeleteIcon fontSize="small" />
-                                        </IconButton>
+                                        {isAdmin && (
+                                            <IconButton
+                                                size="small"
+                                                onClick={(e) => { e.stopPropagation(); setDeleteConfirm(round.letter); }}
+                                                sx={{ bgcolor: 'error.container', color: 'error.main', '&:hover': { bgcolor: 'error.light' } }}
+                                            >
+                                                <DeleteIcon fontSize="small" />
+                                            </IconButton>
+                                        )}
                                         <IconButton
                                             size="small"
                                             onClick={(e) => { e.stopPropagation(); navigate(`/letter/${round.letter}`); }}

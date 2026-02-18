@@ -1,18 +1,74 @@
 import React, { useEffect, useState } from 'react';
-import { Container, Typography, Card, CardContent, Chip, List, ListItem, ListItemText, Box, Divider, ListItemButton, Button, IconButton, Stack, Dialog, DialogTitle, DialogContent } from '@mui/material';
-import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon } from '@mui/icons-material';
+import { Container, Typography, Card, CardContent, Chip, List, ListItem, ListItemText, Box, Divider, ListItemButton, Button, IconButton, Stack, Dialog, DialogTitle, DialogContent, CircularProgress, DialogActions, Snackbar, Alert } from '@mui/material';
+import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon, WhatsApp as WhatsAppIcon, Email as EmailIcon, Campaign as CampaignIcon, ContentCopy as CopyIcon, AutoAwesome as AIPreviewIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { storage } from '../storage';
-import type { LetterRound } from '../types';
+import { useAuth } from '../context/useAuth';
+import { db, auth } from '../firebase';
+import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import type { LetterRound, Environment, UserPreferences } from '../types';
 import { RoundStatus } from '../types';
 
 const Home: React.FC = () => {
+    const { profile, environment, loading: authLoading } = useAuth();
     const [rounds, setRounds] = useState<LetterRound[]>([]);
+    const [pendingInvite, setPendingInvite] = useState<Environment | null>(null);
+    const [isAccepting, setIsAccepting] = useState(false);
+    const [showRemindCopySuccess, setShowRemindCopySuccess] = useState(false);
+    const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+
+    const [showRemindDialog, setShowRemindDialog] = useState(false);
     const navigate = useNavigate();
 
     useEffect(() => {
-        storage.getRounds().then(setRounds);
-    }, []);
+        if (environment?.id) {
+            storage.getRounds(environment.id).then(setRounds);
+            storage.getPreferences(environment.id).then(setPreferences);
+        } else if (profile && !authLoading) {
+            // Search for invitations
+            const checkInvites = async () => {
+                const normalizedProfileEmail = profile.email.toLowerCase().trim();
+                const emailsToSearch = [profile.email.trim(), normalizedProfileEmail];
+                // Remove duplicates
+                const uniqueEmails = [...new Set(emailsToSearch)];
+
+                for (const email of uniqueEmails) {
+                    const q = query(collection(db, 'environments'), where('memberEmails', 'array-contains', email));
+                    const snap = await getDocs(q);
+                    if (!snap.empty) {
+                        const envData = snap.docs[0].data() as Environment;
+                        setPendingInvite(envData);
+                        break; // Found one, stop searching
+                    }
+                }
+            };
+            checkInvites();
+        }
+    }, [environment, profile, authLoading]);
+
+    const handleAcceptInvite = async () => {
+        if (!pendingInvite || !profile) return;
+        setIsAccepting(true);
+        try {
+            const userRef = doc(db, 'users', profile.uid);
+            const normalizedEmail = profile.email.toLowerCase().trim();
+            await updateDoc(userRef, {
+                environmentId: pendingInvite.id,
+                email: normalizedEmail
+            });
+            window.location.reload();
+        } catch (e) {
+            console.error('Error accepting invite:', e);
+        } finally {
+            setIsAccepting(false);
+        }
+    };
+
+    const getDisplayName = (email: string) => {
+        if (!environment) return email;
+        const normalizedEmail = email.toLowerCase().replace(/\./g, '_');
+        return environment.memberNames[normalizedEmail] || email;
+    };
 
     const getNextRound = () => {
         if (rounds.length === 0) return null;
@@ -25,8 +81,8 @@ const Home: React.FC = () => {
     const getStatusLabel = (status: RoundStatus) => {
         switch (status) {
             case RoundStatus.Done: return 'Erledigt';
-            case RoundStatus.Confirmed: return 'Bestätigt';
-            case RoundStatus.Proposed: return 'Vorgeschlagen';
+            case RoundStatus.Planned: return 'Geplant';
+            case RoundStatus.Draft: return 'Entwurf';
             default: return 'Nicht gestartet';
         }
     };
@@ -34,8 +90,8 @@ const Home: React.FC = () => {
     const getStatusColor = (status: RoundStatus): "success" | "primary" | "warning" | "default" => {
         switch (status) {
             case RoundStatus.Done: return 'success';
-            case RoundStatus.Confirmed: return 'primary';
-            case RoundStatus.Proposed: return 'warning';
+            case RoundStatus.Planned: return 'primary';
+            case RoundStatus.Draft: return 'warning';
             default: return 'default';
         }
     };
@@ -47,32 +103,162 @@ const Home: React.FC = () => {
     };
 
     const submitRating = async (rating: number) => {
-        if (!ratingRound) return;
+        if (!ratingRound || !environment || !profile) return;
+        const normalizedEmail = profile.email.toLowerCase().trim();
         const updates: Partial<LetterRound> = {
             status: RoundStatus.Done,
-            rating,
+            ratings: {
+                ...(ratingRound.ratings || {}),
+                [normalizedEmail]: rating
+            },
             updatedAt: new Date().toISOString()
         };
-        const allRounds = await storage.getRounds();
-        const newRounds = allRounds.map(r => r.letter === ratingRound.letter ? { ...r, ...updates } : r);
-        await storage.saveRounds(newRounds);
+
+        // Also update legacy rating as average for now
+        const allRatings = Object.values(updates.ratings || {});
+        if (allRatings.length > 0) {
+            updates.rating = allRatings.reduce((a, b) => a + b, 0) / allRatings.length;
+        }
+
+        const allRounds = await storage.getRounds(environment.id);
+        const newRounds = allRounds.map((r: LetterRound) => r.letter === ratingRound.letter ? { ...r, ...updates } : r);
+        await storage.saveRounds(environment.id, newRounds);
         setRounds(newRounds);
         setRatingRound(null);
     };
 
+    if (authLoading || (environment && rounds.length === 0)) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+                <Typography color="text.secondary">Lade Daten...</Typography>
+            </Box>
+        );
+    }
+
+    if (!environment) {
+        return (
+            <Container maxWidth="sm" sx={{ py: 8, textAlign: 'center' }}>
+                <Typography variant="h4" gutterBottom sx={{ fontWeight: 800, color: 'primary.main' }}>
+                    Willkommen!
+                </Typography>
+                <Typography variant="body1" color="text.secondary" paragraph>
+                    Du bist momentan keinem Portal zugeordnet.
+                </Typography>
+
+                {pendingInvite ? (
+                    <Dialog open={!!pendingInvite} PaperProps={{ sx: { borderRadius: 4, p: 2 } }}>
+                        <DialogTitle sx={{ fontWeight: 800, textAlign: 'center' }}>Einladung erhalten!</DialogTitle>
+                        <DialogContent>
+                            <Box sx={{ textAlign: 'center', mb: 3 }}>
+                                <PartyIcon sx={{ fontSize: 60, color: 'primary.main', mb: 2 }} />
+                                <Typography variant="h6" gutterBottom>
+                                    Du wurdest zu einem Portal eingeladen!
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    Möchtest du dem Portal beitreten?
+                                </Typography>
+                            </Box>
+                            <Stack spacing={2}>
+                                <Button
+                                    variant="contained"
+                                    fullWidth
+                                    size="large"
+                                    onClick={handleAcceptInvite}
+                                    disabled={isAccepting}
+                                    sx={{ fontWeight: 700, borderRadius: 3 }}
+                                >
+                                    {isAccepting ? <CircularProgress size={24} color="inherit" /> : 'Jetzt beitreten'}
+                                </Button>
+                                <Button
+                                    variant="outlined"
+                                    fullWidth
+                                    onClick={() => auth.signOut().then(() => navigate('/login'))}
+                                    sx={{ fontWeight: 700, borderRadius: 3 }}
+                                >
+                                    Mit anderem Konto anmelden
+                                </Button>
+                            </Stack>
+                        </DialogContent>
+                    </Dialog>
+                ) : (
+                    <Button variant="contained" onClick={() => navigate('/settings')} sx={{ mt: 2 }}>
+                        Zum Profil
+                    </Button>
+                )}
+            </Container>
+        );
+    }
+
     if (rounds.length === 0 || !currentRound) return null;
 
-    const needsPlanning = !currentRound.proposalText;
+
+    const isPlanned = currentRound.status === RoundStatus.Planned;
+    const needsPlanning = !isPlanned;
+    const isProposer = profile?.email?.toLowerCase().trim() === currentRound.proposerUserId?.toLowerCase().trim();
+
+    const handleRemind = (method: 'whatsapp' | 'email') => {
+        if (!environment || !currentRound) return;
+
+        const proposerName = getDisplayName(currentRound.proposerUserId);
+        const appUrl = window.location.origin;
+        const subject = `Erinnerung: ABC Dates - Buchstabe ${currentRound.letter}`;
+        const message = `Hallo ${proposerName}, du bist bei ABC Dates für den Buchstaben ${currentRound.letter} an der Reihe! 🎉 Hast du schon eine Idee? \n\nJetzt anmelden: ${appUrl}`;
+
+        if (method === 'whatsapp') {
+            const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+            window.open(url, '_blank');
+        } else {
+            const url = `mailto:${currentRound.proposerUserId}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`;
+            window.location.href = url;
+        }
+        setShowRemindDialog(false);
+    };
+
+    const handleCopyLink = () => {
+        const appUrl = window.location.origin;
+        navigator.clipboard.writeText(appUrl);
+        setShowRemindCopySuccess(true);
+        setShowRemindDialog(false);
+    };
 
     return (
         <Container maxWidth="sm" sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1.5, sm: 3 } }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-                <Typography variant="h4" sx={{ color: 'primary.dark', fontWeight: 800 }}>ABC Dates</Typography>
+                <Box>
+                    <Typography variant="h4" sx={{ color: 'primary.dark', fontWeight: 800 }}>
+                        {environment?.name || 'ABC Dates'}
+                    </Typography>
+                    {environment?.name && (
+                        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block', mt: -0.5 }}>
+                            ABC Dates Portal
+                        </Typography>
+                    )}
+                </Box>
                 <Box>
                     <IconButton onClick={() => navigate('/history')}><HistoryIcon color="primary" /></IconButton>
                     <IconButton onClick={() => navigate('/settings')}><SettingsIcon color="primary" /></IconButton>
                 </Box>
             </Box>
+
+            {environment && (!preferences || !preferences.completedAt) && (
+                <Card sx={{ mb: 4, bgcolor: 'primary.50', border: '1px solid', borderColor: 'primary.100', borderRadius: 3 }}>
+                    <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: '16px !important' }}>
+                        <AIPreviewIcon color="primary" />
+                        <Box sx={{ flexGrow: 1 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'primary.dark' }}>Setup abschließen</Typography>
+                            <Typography variant="caption" color="text.secondary">Personalisiere deine KI-Vorschläge für bessere Dates.</Typography>
+                        </Box>
+                        <Button
+                            size="small"
+                            variant="contained"
+                            onClick={() => navigate('/onboarding')}
+                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 700 }}
+                        >
+                            Starten
+                        </Button>
+                    </CardContent>
+                </Card>
+            )}
 
             <Card sx={{
                 mb: 6,
@@ -91,7 +277,7 @@ const Home: React.FC = () => {
                     {needsPlanning ? (
                         <Box sx={{ position: 'relative', py: 2 }}>
                             <Typography variant="h3" sx={{ my: 2, fontWeight: 800, position: 'relative', zIndex: 1 }}>
-                                {currentRound.proposerUserId === 'mauro' ? 'Mauro' : 'Giorgia'} ist dran!
+                                {getDisplayName(currentRound.proposerUserId)} ist dran!
                             </Typography>
                             <Typography variant="h1" sx={{ fontSize: { xs: '6rem', sm: '8rem' }, opacity: 0.15, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 0, fontWeight: 900 }}>
                                 {currentRound.letter}
@@ -111,24 +297,47 @@ const Home: React.FC = () => {
                     )}
 
                     <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
-                        <Button
-                            variant="contained"
-                            size="large"
-                            sx={{
-                                backgroundColor: 'white !important',
-                                backgroundImage: 'none !important',
-                                color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important',
-                                fontWeight: 900,
-                                px: 4,
-                                borderRadius: 3,
-                                boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
-                                textTransform: 'none',
-                                '&:hover': { backgroundColor: '#f5f5f5 !important' }
-                            }}
-                            onClick={() => navigate(`/letter/${currentRound.letter}`)}
-                        >
-                            {needsPlanning ? 'Jetzt planen' : 'Details'}
-                        </Button>
+
+                        {needsPlanning && !isProposer ? (
+                            <Button
+                                variant="contained"
+                                size="large"
+                                startIcon={<CampaignIcon />}
+                                sx={{
+                                    backgroundColor: 'white !important',
+                                    backgroundImage: 'none !important',
+                                    color: '#FF9800 !important', // Reminder orange
+                                    fontWeight: 900,
+                                    px: 4,
+                                    borderRadius: 3,
+                                    boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
+                                    textTransform: 'none',
+                                    '&:hover': { backgroundColor: '#f5f5f5 !important' }
+                                }}
+                                onClick={() => setShowRemindDialog(true)}
+                            >
+                                Person erinnern
+                            </Button>
+                        ) : (
+                            <Button
+                                variant="contained"
+                                size="large"
+                                sx={{
+                                    backgroundColor: 'white !important',
+                                    backgroundImage: 'none !important',
+                                    color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important',
+                                    fontWeight: 900,
+                                    px: 4,
+                                    borderRadius: 3,
+                                    boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
+                                    textTransform: 'none',
+                                    '&:hover': { backgroundColor: '#f5f5f5 !important' }
+                                }}
+                                onClick={() => navigate(`/letter/${currentRound.letter}`)}
+                            >
+                                {isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}
+                            </Button>
+                        )}
                         {!needsPlanning && (
                             <Button
                                 variant="outlined"
@@ -136,8 +345,9 @@ const Home: React.FC = () => {
                                 startIcon={<CheckCircleIcon />}
                                 sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
                                 onClick={() => handleMarkAsDone(currentRound)}
+                                disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
                             >
-                                Erledigt
+                                Als erledigt markieren
                             </Button>
                         )}
                     </Stack>
@@ -149,7 +359,7 @@ const Home: React.FC = () => {
             </Typography>
             <Card>
                 <List disablePadding>
-                    {rounds.map((round, index) => (
+                    {rounds.map((round: LetterRound, index: number) => (
                         <React.Fragment key={round.letter}>
                             <ListItem disablePadding>
                                 <ListItemButton
@@ -165,8 +375,8 @@ const Home: React.FC = () => {
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         bgcolor: round.status === RoundStatus.Done ? 'success.light' :
-                                            round.status === RoundStatus.Confirmed ? 'primary.light' : 'grey.100',
-                                        color: round.status === RoundStatus.Done || round.status === RoundStatus.Confirmed ? 'white' : 'text.secondary'
+                                            round.status === RoundStatus.Planned ? 'primary.light' : 'grey.100',
+                                        color: round.status === RoundStatus.Done || round.status === RoundStatus.Planned ? 'white' : 'text.secondary'
                                     }}>
                                         <Typography variant="h6" sx={{ fontWeight: 700 }}>{round.letter}</Typography>
                                     </Box>
@@ -174,7 +384,7 @@ const Home: React.FC = () => {
                                         primary={
                                             <Box display="flex" alignItems="center" gap={1}>
                                                 <Typography variant="subtitle1" component="span" sx={{ fontWeight: 700 }}>
-                                                    {round.proposerUserId === 'mauro' ? 'Mauro' : 'Giorgia'}
+                                                    {getDisplayName(round.proposerUserId)}
                                                 </Typography>
                                                 <Chip
                                                     size="small"
@@ -182,6 +392,15 @@ const Home: React.FC = () => {
                                                     color={getStatusColor(round.status) as any}
                                                     sx={{ fontSize: '0.65rem', height: 20 }}
                                                 />
+                                                {round.status === RoundStatus.Done && profile && !round.ratings?.[profile.email.toLowerCase().trim()] && (
+                                                    <Chip
+                                                        size="small"
+                                                        label="Deine Bewertung fehlt"
+                                                        color="warning"
+                                                        variant="outlined"
+                                                        sx={{ fontSize: '0.65rem', height: 20, fontWeight: 700 }}
+                                                    />
+                                                )}
                                             </Box>
                                         }
                                         secondary={
@@ -202,16 +421,28 @@ const Home: React.FC = () => {
                                                 )}
                                                 {!!round.rating && round.rating > 0 && (
                                                     <Box sx={{ display: 'flex', mt: 0.5 }}>
-                                                        {[...Array(5)].map((_, i) => (
-                                                            <StarIcon key={i} sx={{ fontSize: 16, color: i < round.rating! ? '#FFD700' : 'grey.300' }} />
-                                                        ))}
+                                                        {[1, 2, 3, 4, 5].map((star) => {
+                                                            const avg = round.rating || 0;
+                                                            const isHalf = avg >= star - 0.75 && avg < star - 0.25;
+                                                            const isFull = avg >= star - 0.25;
+                                                            return (
+                                                                <StarIcon
+                                                                    key={star}
+                                                                    sx={{
+                                                                        fontSize: 16,
+                                                                        color: isFull || isHalf ? '#FFD700' : 'grey.300',
+                                                                        opacity: isFull ? 1 : isHalf ? 0.7 : 1
+                                                                    }}
+                                                                />
+                                                            );
+                                                        })}
                                                     </Box>
                                                 )}
                                             </Box>
                                         }
                                     />
                                     {round.status === RoundStatus.Done ? <TrophyIcon color="success" /> :
-                                        round.status === RoundStatus.Confirmed ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
+                                        round.status === RoundStatus.Planned ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
                                 </ListItemButton>
                             </ListItem>
                             {index < rounds.length - 1 && <Divider />}
@@ -231,8 +462,54 @@ const Home: React.FC = () => {
                             <StarOutlineIcon fontSize="inherit" />
                         </IconButton>
                     ))}
+
                 </DialogContent>
             </Dialog>
+
+            <Dialog open={showRemindDialog} onClose={() => setShowRemindDialog(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
+                <DialogTitle sx={{ fontWeight: 800 }}>Partner erinnern</DialogTitle>
+                <DialogContent>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        Wie möchtest du {getDisplayName(currentRound.proposerUserId)} an den Buchstaben <strong>{currentRound.letter}</strong> erinnern?
+                    </Typography>
+                    <Stack spacing={2}>
+                        <Button
+                            fullWidth
+                            variant="contained"
+                            startIcon={<WhatsAppIcon />}
+                            onClick={() => handleRemind('whatsapp')}
+                            sx={{ bgcolor: '#25D366', '&:hover': { bgcolor: '#128C7E' }, fontWeight: 700, borderRadius: 2 }}
+                        >
+                            Per WhatsApp
+                        </Button>
+                        <Button
+                            fullWidth
+                            variant="outlined"
+                            startIcon={<EmailIcon />}
+                            onClick={() => handleRemind('email')}
+                            sx={{ fontWeight: 700, borderRadius: 2 }}
+                        >
+                            Per E-Mail
+                        </Button>
+                        <Button
+                            fullWidth
+                            variant="outlined"
+                            startIcon={<CopyIcon />}
+                            onClick={handleCopyLink}
+                            sx={{ fontWeight: 700, borderRadius: 2 }}
+                        >
+                            Link kopieren
+                        </Button>
+                    </Stack>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setShowRemindDialog(false)} color="inherit" sx={{ fontWeight: 700 }}>Abbrechen</Button>
+                </DialogActions>
+            </Dialog>
+
+            <Snackbar open={showRemindCopySuccess} autoHideDuration={3000} onClose={() => setShowRemindCopySuccess(false)}>
+                <Alert severity="success" sx={{ borderRadius: 2 }}>Link in die Zwischenablage kopiert!</Alert>
+            </Snackbar>
         </Container>
     );
 };

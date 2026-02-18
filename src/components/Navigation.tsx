@@ -11,6 +11,10 @@ const Navigation: React.FC = () => {
 
     if (!user) return null;
 
+    // Hide navigation on auth and verification screens
+    const hideOnPaths = ['/login', '/register', '/verify-email', '/forgot-password', '/welcome'];
+    if (hideOnPaths.includes(location.pathname)) return null;
+
     const getValue = () => {
         if (location.pathname === '/') return 0;
         if (location.pathname === '/history') return 1;

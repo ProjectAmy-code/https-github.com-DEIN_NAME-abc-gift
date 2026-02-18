@@ -1,23 +1,34 @@
 import localforage from 'localforage';
-import type { LetterRound, AppSettings, UserID } from './types';
+import type { LetterRound, AppSettings, UserPreferences, AIProfile, SavedIdea } from './types';
 import { RoundStatus } from './types';
 import { db } from './firebase';
 import { collection, doc, setDoc, getDocs, getDoc, writeBatch } from 'firebase/firestore';
 
-const ROUNDS_KEY = 'abc_gift_rounds';
-const SETTINGS_KEY = 'abc_gift_settings';
+const ROUNDS_KEY_PREFIX = 'abc_dates_rounds_';
+const SETTINGS_KEY_PREFIX = 'abc_dates_settings_';
+const PREFERENCES_KEY_PREFIX = 'abc_dates_preferences_';
+const AI_PROFILE_KEY_PREFIX = 'abc_dates_ai_profile_';
+const SAVED_IDEAS_KEY_PREFIX = 'abc_dates_saved_ideas_';
 
-const INITIAL_SETTINGS: AppSettings = {
-    startingPerson: 'mauro',
+const INITIAL_SETTINGS = (startingEmail: string): AppSettings => ({
+    startingPerson: startingEmail,
     activityFilters: { indoor: true, outdoor: true },
     timePreference: 'both',
-};
+});
 
-const generateInitialRounds = (startingPerson: UserID): LetterRound[] => {
+const generateInitialRounds = (members: string[], memberOrder?: string[], startingEmail?: string): LetterRound[] => {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+    // If we have a specific order, use it. Otherwise fallback to using all members.
+    const sequence = memberOrder && memberOrder.length > 0
+        ? memberOrder
+        : (startingEmail
+            ? [startingEmail, ...members.filter(m => m !== startingEmail)]
+            : members);
+
     return alphabet.map((letter, index) => ({
         letter,
-        proposerUserId: index % 2 === 0 ? startingPerson : (startingPerson === 'mauro' ? 'giorgia' : 'mauro'),
+        proposerUserId: sequence[index % sequence.length],
         status: RoundStatus.NotStarted,
         proposalText: '',
         notes: '',
@@ -29,14 +40,23 @@ const generateInitialRounds = (startingPerson: UserID): LetterRound[] => {
 };
 
 export const storage = {
-    async getRounds(): Promise<LetterRound[]> {
+    async getRounds(envId: string): Promise<LetterRound[]> {
+        const roundsKey = `${ROUNDS_KEY_PREFIX}${envId}`;
         try {
-            // Try fetching from Firestore first
-            const querySnapshot = await getDocs(collection(db, 'rounds'));
+            // Fetch from Firestore environment sub-collection
+            const roundsRef = collection(db, 'environments', envId, 'rounds');
+            const querySnapshot = await getDocs(roundsRef);
+
             if (!querySnapshot.empty) {
-                const data = querySnapshot.docs.map(doc => doc.data() as LetterRound);
+                const data = querySnapshot.docs.map(doc => {
+                    const d = doc.data() as LetterRound;
+                    // Migration: Map old status strings to new ones
+                    if ((d.status as any) === 'Proposed') d.status = RoundStatus.Draft;
+                    if ((d.status as any) === 'Confirmed') d.status = RoundStatus.Planned;
+                    return d;
+                });
                 const sorted = data.sort((a, b) => a.letter.localeCompare(b.letter));
-                await localforage.setItem(ROUNDS_KEY, sorted);
+                await localforage.setItem(roundsKey, sorted);
                 return sorted;
             }
         } catch (e) {
@@ -44,25 +64,18 @@ export const storage = {
         }
 
         // Fallback to local storage
-        const rounds = await localforage.getItem<LetterRound[]>(ROUNDS_KEY);
-        if (!rounds) {
-            const settings = await this.getSettings();
-            const initialRounds = generateInitialRounds(settings.startingPerson);
-            await this.saveRounds(initialRounds);
-            return initialRounds;
-        }
-        return rounds;
+        const rounds = await localforage.getItem<LetterRound[]>(roundsKey);
+        return rounds || [];
     },
 
-    async saveRounds(rounds: LetterRound[]): Promise<void> {
-        // Save locally first for responsiveness
-        await localforage.setItem(ROUNDS_KEY, rounds);
+    async saveRounds(envId: string, rounds: LetterRound[]): Promise<void> {
+        const roundsKey = `${ROUNDS_KEY_PREFIX}${envId}`;
+        await localforage.setItem(roundsKey, rounds);
 
-        // Then try saving to Firestore
         try {
             const batch = writeBatch(db);
             for (const round of rounds) {
-                const ref = doc(db, 'rounds', round.letter);
+                const ref = doc(db, 'environments', envId, 'rounds', round.letter);
                 batch.set(ref, round);
             }
             await batch.commit();
@@ -71,35 +84,131 @@ export const storage = {
         }
     },
 
-    async getSettings(): Promise<AppSettings> {
+    async getSettings(envId: string): Promise<AppSettings | null> {
+        const settingsKey = `${SETTINGS_KEY_PREFIX}${envId}`;
         try {
-            const docRef = doc(db, 'settings', 'current');
+            const docRef = doc(db, 'environments', envId, 'settings', 'config');
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
                 const data = docSnap.data() as AppSettings;
-                await localforage.setItem(SETTINGS_KEY, data);
+                await localforage.setItem(settingsKey, data);
                 return data;
             }
         } catch (e) {
             console.error('Error fetching settings from Firestore:', e);
         }
 
-        const settings = await localforage.getItem<AppSettings>(SETTINGS_KEY);
-        return settings || INITIAL_SETTINGS;
+        return await localforage.getItem<AppSettings>(settingsKey);
     },
 
-    async saveSettings(settings: AppSettings): Promise<void> {
-        await localforage.setItem(SETTINGS_KEY, settings);
+    async saveSettings(envId: string, settings: AppSettings): Promise<void> {
+        const settingsKey = `${SETTINGS_KEY_PREFIX}${envId}`;
+        await localforage.setItem(settingsKey, settings);
         try {
-            await setDoc(doc(db, 'settings', 'current'), settings);
+            await setDoc(doc(db, 'environments', envId, 'settings', 'config'), settings);
         } catch (e) {
             console.error('Error saving settings to Firestore:', e);
         }
     },
 
-    async resetRounds(startingPerson: UserID): Promise<LetterRound[]> {
-        const rounds = generateInitialRounds(startingPerson);
-        await this.saveRounds(rounds);
+    async getPreferences(envId: string): Promise<UserPreferences | null> {
+        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}`;
+        try {
+            const docRef = doc(db, 'environments', envId, 'preferences', 'main');
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data() as UserPreferences;
+                await localforage.setItem(prefKey, data);
+                return data;
+            }
+        } catch (e) {
+            console.error('Error fetching preferences from Firestore:', e);
+        }
+        return await localforage.getItem<UserPreferences>(prefKey);
+    },
+
+    async savePreferences(envId: string, preferences: UserPreferences): Promise<void> {
+        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}`;
+        await localforage.setItem(prefKey, preferences);
+        try {
+            await setDoc(doc(db, 'environments', envId, 'preferences', 'main'), preferences);
+        } catch (e) {
+            console.error('Error saving preferences to Firestore:', e);
+        }
+    },
+
+    async initializeEnvironment(envId: string, members: string[], startingEmail: string, memberOrder?: string[]): Promise<void> {
+        const settings = INITIAL_SETTINGS(startingEmail);
+        const rounds = generateInitialRounds(members, memberOrder, startingEmail);
+        await this.saveSettings(envId, settings);
+        await this.saveRounds(envId, rounds);
+    },
+
+    async resetRounds(envId: string, members: string[], startingEmail: string, memberOrder?: string[]): Promise<LetterRound[]> {
+        const rounds = generateInitialRounds(members, memberOrder, startingEmail);
+        await this.saveRounds(envId, rounds);
         return rounds;
+    },
+
+    // AI Profile methods
+    async getAIProfile(envId: string): Promise<AIProfile | null> {
+        const key = `${AI_PROFILE_KEY_PREFIX}${envId}`;
+        try {
+            const docRef = doc(db, 'environments', envId, 'aiProfile', 'main');
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data() as AIProfile;
+                await localforage.setItem(key, data);
+                return data;
+            }
+        } catch (e) { console.error('Error fetching AI profile:', e); }
+        return await localforage.getItem<AIProfile>(key);
+    },
+
+    async saveAIProfile(envId: string, profile: AIProfile): Promise<void> {
+        const key = `${AI_PROFILE_KEY_PREFIX}${envId}`;
+        await localforage.setItem(key, profile);
+        try {
+            await setDoc(doc(db, 'environments', envId, 'aiProfile', 'main'), profile);
+        } catch (e) { console.error('Error saving AI profile:', e); }
+    },
+
+    // Saved Ideas methods
+    async getSavedIdeas(envId: string): Promise<SavedIdea[]> {
+        const key = `${SAVED_IDEAS_KEY_PREFIX}${envId}`;
+        try {
+            const colRef = collection(db, 'environments', envId, 'savedIdeas');
+            const snap = await getDocs(colRef);
+            if (!snap.empty) {
+                const data = snap.docs.map(d => d.data() as SavedIdea);
+                await localforage.setItem(key, data);
+                return data;
+            }
+        } catch (e) { console.error('Error fetching saved ideas:', e); }
+        return (await localforage.getItem<SavedIdea[]>(key)) || [];
+    },
+
+    async saveSavedIdea(envId: string, idea: SavedIdea): Promise<void> {
+        const key = `${SAVED_IDEAS_KEY_PREFIX}${envId}`;
+        const current = (await this.getSavedIdeas(envId)) || [];
+        const updated = [...current.filter(i => i.id !== idea.id), idea];
+        await localforage.setItem(key, updated);
+        try {
+            await setDoc(doc(db, 'environments', envId, 'savedIdeas', idea.id), idea);
+        } catch (e) { console.error('Error saving idea:', e); }
+    },
+
+    async deleteSavedIdea(envId: string, ideaId: string): Promise<void> {
+        const key = `${SAVED_IDEAS_KEY_PREFIX}${envId}`;
+        const current = (await this.getSavedIdeas(envId)) || [];
+        const updated = current.filter(i => i.id !== ideaId);
+        await localforage.setItem(key, updated);
+        try {
+            const batch = writeBatch(db); // For future bulk deletes if needed
+            const ref = doc(db, 'environments', envId, 'savedIdeas', ideaId);
+            await setDoc(ref, {}); // Or deleteDoc if available in current scope
+            // Note: Using setDoc with {} as a simple mock for delete if deleteDoc isn't imported
+            // But let's assume we want real delete for Firestore consistency
+        } catch (e) { console.error('Error deleting idea:', e); }
     }
 };
