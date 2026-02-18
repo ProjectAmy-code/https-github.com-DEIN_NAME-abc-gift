@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Typography, Card, CardContent, FormControl, InputLabel, Select, MenuItem, Switch, FormControlLabel, Button, Box, Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, CircularProgress } from '@mui/material';
 import { storage } from '../storage';
+import { auth } from '../firebase';
 import type { AppSettings, UserID } from '../types';
 
 const Settings: React.FC = () => {
@@ -83,6 +84,21 @@ const Settings: React.FC = () => {
             <Button color="error" fullWidth onClick={() => setShowResetDialog(true)} sx={{ mt: 2, fontWeight: 700 }}>
                 Gesamten Fortschritt zurücksetzen
             </Button>
+
+            <Box sx={{ mt: 6, pt: 4, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center', mb: 2 }}>
+                    Angemeldet als {auth.currentUser?.email}
+                </Typography>
+                <Button
+                    variant="outlined"
+                    color="inherit"
+                    fullWidth
+                    onClick={() => auth.signOut().then(() => window.location.href = '/login')}
+                    sx={{ fontWeight: 700, borderRadius: 2 }}
+                >
+                    Abmelden
+                </Button>
+            </Box>
 
             <Dialog open={showResetDialog} onClose={() => !isResetting && setShowResetDialog(false)} PaperProps={{ sx: { borderRadius: 4 } }}>
                 <DialogTitle sx={{ fontWeight: 700 }}>Fortschritt zurücksetzen?</DialogTitle>

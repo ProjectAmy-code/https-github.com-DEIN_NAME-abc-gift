@@ -2,10 +2,14 @@ import React from 'react';
 import { BottomNavigation, BottomNavigationAction, Paper } from '@mui/material';
 import { Home as HomeIcon, History as HistoryIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/useAuth';
 
 const Navigation: React.FC = () => {
     const navigate = useNavigate();
     const location = useLocation();
+    const { user } = useAuth();
+
+    if (!user) return null;
 
     const getValue = () => {
         if (location.pathname === '/') return 0;
