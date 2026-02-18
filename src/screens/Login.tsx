@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Container, Box, Typography, TextField, Button, Card, CardContent, InputAdornment, IconButton, Alert, Fade } from '@mui/material';
+import { Container, Box, Typography, TextField, Button, Card, CardContent, InputAdornment, IconButton, Alert, Fade, Link, Stack } from '@mui/material';
 import { Email as EmailIcon, Lock as LockIcon, Visibility, VisibilityOff } from '@mui/icons-material';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link as RouterLink } from 'react-router-dom';
 
 const Login: React.FC = () => {
     const [email, setEmail] = useState('');
@@ -62,6 +62,8 @@ const Login: React.FC = () => {
                                     margin="normal"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
+                                    type="email"
+                                    required
                                     InputProps={{
                                         startAdornment: (
                                             <InputAdornment position="start">
@@ -79,6 +81,7 @@ const Login: React.FC = () => {
                                     margin="normal"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
+                                    required
                                     InputProps={{
                                         startAdornment: (
                                             <InputAdornment position="start">
@@ -112,6 +115,15 @@ const Login: React.FC = () => {
                                     {loading ? 'Wird angemeldet...' : 'Anmelden'}
                                 </Button>
                             </form>
+
+                            <Stack direction="row" justifyContent="space-between" sx={{ mt: 3 }}>
+                                <Link component={RouterLink} to="/forgot-password" variant="body2" sx={{ color: 'text.secondary', textDecoration: 'none' }}>
+                                    Passwort vergessen?
+                                </Link>
+                                <Link component={RouterLink} to="/register" variant="body2" sx={{ fontWeight: 700, color: 'primary.main', textDecoration: 'none' }}>
+                                    Registrieren
+                                </Link>
+                            </Stack>
                         </CardContent>
                     </Card>
                 </Box>
