@@ -8,7 +8,6 @@ import { de } from 'date-fns/locale'
 import theme from './theme'
 import Navigation from './components/Navigation'
 import Home from './screens/Home'
-import History from './screens/History'
 import Settings from './screens/Settings'
 import LetterDetail from './screens/LetterDetail'
 import Login from './screens/Login'
@@ -38,7 +37,6 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/onboarding" element={<AuthGuard><Onboarding /></AuthGuard>} />
                 <Route path="/" element={<AuthGuard><Home /></AuthGuard>} />
                 <Route path="/letter/:letter" element={<AuthGuard><LetterDetail /></AuthGuard>} />
-                <Route path="/history" element={<AuthGuard><History /></AuthGuard>} />
                 <Route path="/settings" element={<AuthGuard><Settings /></AuthGuard>} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

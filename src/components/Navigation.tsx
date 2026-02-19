@@ -1,6 +1,6 @@
 import React from 'react';
 import { BottomNavigation, BottomNavigationAction, Paper } from '@mui/material';
-import { Home as HomeIcon, History as HistoryIcon, Settings as SettingsIcon } from '@mui/icons-material';
+import { Home as HomeIcon, Settings as SettingsIcon } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 
@@ -17,8 +17,7 @@ const Navigation: React.FC = () => {
 
     const getValue = () => {
         if (location.pathname === '/') return 0;
-        if (location.pathname === '/history') return 1;
-        if (location.pathname === '/settings') return 2;
+        if (location.pathname === '/settings') return 1;
         return 0;
     };
 
@@ -29,12 +28,10 @@ const Navigation: React.FC = () => {
                 value={getValue()}
                 onChange={(_, newValue) => {
                     if (newValue === 0) navigate('/');
-                    if (newValue === 1) navigate('/history');
-                    if (newValue === 2) navigate('/settings');
+                    if (newValue === 1) navigate('/settings');
                 }}
             >
                 <BottomNavigationAction label="Home" icon={<HomeIcon />} onClick={() => navigate('/')} />
-                <BottomNavigationAction label="Verlauf" icon={<HistoryIcon />} onClick={() => navigate('/history')} />
                 <BottomNavigationAction label="Einstellungen" icon={<SettingsIcon />} onClick={() => navigate('/settings')} />
             </BottomNavigation>
         </Paper>

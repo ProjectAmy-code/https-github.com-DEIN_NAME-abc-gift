@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Container, Typography, Card, CardContent, Chip, List, ListItem, ListItemText, Box, Divider, ListItemButton, Button, IconButton, Stack, Dialog, DialogTitle, DialogContent, CircularProgress, DialogActions, Snackbar, Alert } from '@mui/material';
-import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon, WhatsApp as WhatsAppIcon, Email as EmailIcon, Campaign as CampaignIcon, ContentCopy as CopyIcon, AutoAwesome as AIPreviewIcon } from '@mui/icons-material';
+import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon, WhatsApp as WhatsAppIcon, Email as EmailIcon, Campaign as CampaignIcon, ContentCopy as CopyIcon, AutoAwesome as AIPreviewIcon, Casino as CasinoIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { storage } from '../storage';
 import { useAuth } from '../context/useAuth';
@@ -8,6 +8,9 @@ import { db, auth } from '../firebase';
 import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
 import type { LetterRound, Environment, UserPreferences } from '../types';
 import { RoundStatus } from '../types';
+import { motion, AnimatePresence } from 'framer-motion';
+
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 const Home: React.FC = () => {
     const { profile, environment, loading: authLoading } = useAuth();
@@ -20,10 +23,20 @@ const Home: React.FC = () => {
     const [showRemindDialog, setShowRemindDialog] = useState(false);
     const navigate = useNavigate();
 
+    // Random mode state
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [spinLetter, setSpinLetter] = useState<string | null>(null);
+    const [drawnLetter, setDrawnLetter] = useState<string | null>(null);
+    const [animationPhase, setAnimationPhase] = useState<'idle' | 'spinning' | 'revealed' | 'transitioning'>('idle');
+    const [drawnProposer, setDrawnProposer] = useState<string | null>(null);
+
+    const isRandomMode = environment?.abcMode === 'random';
+    const drawnOrder = environment?.drawnOrder || [];
+
     useEffect(() => {
         if (environment?.id) {
             storage.getRounds(environment.id).then(setRounds);
-            storage.getPreferences(environment.id).then(setPreferences);
+            storage.getPreferences(environment.id, profile?.email).then(setPreferences);
         } else if (profile && !authLoading) {
             // Search for invitations
             const checkInvites = async () => {
@@ -72,11 +85,98 @@ const Home: React.FC = () => {
 
     const getNextRound = () => {
         if (rounds.length === 0) return null;
-        // Find the FIRST round alphabetically that is not "Done"
+
+        if (isRandomMode) {
+            // In random mode: find the last drawn letter's round that is not Done
+            if (drawnOrder.length === 0) return null;
+            // Go through drawnOrder and find the latest non-Done round
+            for (let i = drawnOrder.length - 1; i >= 0; i--) {
+                const round = rounds.find(r => r.letter === drawnOrder[i]);
+                if (round && round.status !== RoundStatus.Done) return round;
+            }
+            // All drawn are done; return null (shows draw button)
+            return null;
+        }
+
+        // Sequential: Find the FIRST round alphabetically that is not "Done"
         return rounds.find(r => r.status !== RoundStatus.Done) || rounds[rounds.length - 1];
     };
 
     const currentRound = getNextRound();
+
+    // Random mode: can we draw the next letter?
+    const canDrawNext = useCallback(() => {
+        if (!isRandomMode || !environment) return false;
+        if (drawnOrder.length >= 26) return false; // All letters drawn
+
+        if (drawnOrder.length === 0) return true; // First draw always possible
+
+        // The last drawn letter must be at least "Planned"
+        const lastDrawnLetter = drawnOrder[drawnOrder.length - 1];
+        const lastRound = rounds.find(r => r.letter === lastDrawnLetter);
+        if (!lastRound) return true;
+
+        return lastRound.status === RoundStatus.Planned || lastRound.status === RoundStatus.Done;
+    }, [isRandomMode, environment, drawnOrder, rounds]);
+
+    const handleDrawLetter = async () => {
+        if (!environment || !canDrawNext() || isDrawing) return;
+
+        setIsDrawing(true);
+        setDrawnLetter(null);
+        setAnimationPhase('spinning');
+        setDrawnProposer(null);
+
+        const drawnSet = new Set(drawnOrder);
+        const remaining = ALPHABET.filter(l => !drawnSet.has(l));
+        if (remaining.length === 0) { setIsDrawing(false); setAnimationPhase('idle'); return; }
+
+        // Pick the actual result
+        const memberOrder = environment.memberOrder || environment.memberEmails;
+        const result = await storage.drawNextLetter(environment.id, drawnOrder, memberOrder);
+        if (!result) { setIsDrawing(false); setAnimationPhase('idle'); return; }
+
+        // Spinning animation: start fast, decelerate
+        let spinCount = 0;
+        const totalSpins = 24;
+        const spin = () => {
+            if (spinCount >= totalSpins) {
+                // Phase 2: Reveal
+                setSpinLetter(result.letter);
+                setDrawnLetter(result.letter);
+                setAnimationPhase('revealed');
+                setDrawnProposer(result.round.proposerUserId);
+
+                // Update drawnOrder in Firestore
+                const newDrawnOrder = [...drawnOrder, result.letter];
+                updateDoc(doc(db, 'environments', environment.id), {
+                    drawnOrder: newDrawnOrder
+                }).catch(e => console.error('Error updating drawnOrder:', e));
+
+                // Refresh rounds
+                storage.getRounds(environment.id).then(setRounds);
+
+                // Phase 3: Transition to planning card after hold
+                setTimeout(() => {
+                    setAnimationPhase('transitioning');
+                    setTimeout(() => {
+                        setIsDrawing(false);
+                        setAnimationPhase('idle');
+                        setDrawnLetter(null);
+                    }, 800);
+                }, 2500);
+                return;
+            }
+
+            const randomIdx = Math.floor(Math.random() * remaining.length);
+            setSpinLetter(remaining[randomIdx]);
+            spinCount++;
+            // Decelerate: start at 50ms, end at ~180ms
+            const delay = 50 + (spinCount / totalSpins) * 130;
+            setTimeout(spin, delay);
+        };
+        spin();
+    };
 
     const getStatusLabel = (status: RoundStatus) => {
         switch (status) {
@@ -189,12 +289,12 @@ const Home: React.FC = () => {
         );
     }
 
-    if (rounds.length === 0 || !currentRound) return null;
+    // For sequential mode, we need currentRound
+    if (!isRandomMode && (rounds.length === 0 || !currentRound)) return null;
 
-
-    const isPlanned = currentRound.status === RoundStatus.Planned;
+    const isPlanned = currentRound?.status === RoundStatus.Planned;
     const needsPlanning = !isPlanned;
-    const isProposer = profile?.email?.toLowerCase().trim() === currentRound.proposerUserId?.toLowerCase().trim();
+    const isProposer = profile?.email?.toLowerCase().trim() === currentRound?.proposerUserId?.toLowerCase().trim();
 
     const handleRemind = (method: 'whatsapp' | 'email') => {
         if (!environment || !currentRound) return;
@@ -221,6 +321,16 @@ const Home: React.FC = () => {
         setShowRemindDialog(false);
     };
 
+    // Random mode: compute the rounds to display in timeline (only drawn letters)
+    const timelineRounds = isRandomMode
+        ? drawnOrder.map(letter => rounds.find(r => r.letter === letter)).filter(Boolean) as LetterRound[]
+        : rounds;
+
+    // Random mode: determine the "last drawn" status for the draw button hint
+    const lastDrawnLetter = drawnOrder.length > 0 ? drawnOrder[drawnOrder.length - 1] : null;
+    const lastDrawnRound = lastDrawnLetter ? rounds.find(r => r.letter === lastDrawnLetter) : null;
+    const allLettersDrawn = drawnOrder.length >= 26;
+
     return (
         <Container maxWidth="sm" sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1.5, sm: 3 } }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
@@ -235,7 +345,6 @@ const Home: React.FC = () => {
                     )}
                 </Box>
                 <Box>
-                    <IconButton onClick={() => navigate('/history')}><HistoryIcon color="primary" /></IconButton>
                     <IconButton onClick={() => navigate('/settings')}><SettingsIcon color="primary" /></IconButton>
                 </Box>
             </Box>
@@ -260,196 +369,446 @@ const Home: React.FC = () => {
                 </Card>
             )}
 
-            <Card sx={{
-                mb: 6,
-                background: needsPlanning
-                    ? 'linear-gradient(135deg, #FF9800 0%, #F44336 100%)' // Warm colors for planning
-                    : 'linear-gradient(135deg, #7C4DFF 0%, #B47CFF 100%)', // Cool purple for planned
-                color: 'white',
-                position: 'relative',
-                overflow: 'visible'
-            }}>
-                <CardContent sx={{ textAlign: 'center', py: 5 }}>
-                    <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
-                        {needsPlanning ? 'Nächste Planung' : 'Nächstes Event'}
-                    </Typography>
-
-                    {needsPlanning ? (
-                        <Box sx={{ position: 'relative', py: 2 }}>
-                            <Typography variant="h3" sx={{ my: 2, fontWeight: 800, position: 'relative', zIndex: 1 }}>
-                                {getDisplayName(currentRound.proposerUserId)} ist dran!
-                            </Typography>
-                            <Typography variant="h1" sx={{ fontSize: { xs: '6rem', sm: '8rem' }, opacity: 0.15, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 0, fontWeight: 900 }}>
-                                {currentRound.letter}
-                            </Typography>
-                        </Box>
+            {/* ===== RANDOM MODE: Draw Card ===== */}
+            {isRandomMode && (isDrawing || (!currentRound || (currentRound && currentRound.status === RoundStatus.Done && !allLettersDrawn) || drawnOrder.length === 0)) && !allLettersDrawn && (
+                <AnimatePresence mode="wait">
+                    {animationPhase === 'transitioning' && drawnLetter && drawnProposer ? (
+                        /* Phase 3: Morphing into the planning card */
+                        <motion.div
+                            key="planning-card"
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ duration: 0.6, ease: 'easeOut' }}
+                        >
+                            <Card sx={{
+                                mb: 6,
+                                background: 'linear-gradient(135deg, #FF9800 0%, #F44336 100%)',
+                                color: 'white',
+                                position: 'relative',
+                                overflow: 'visible'
+                            }}>
+                                <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                                    <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
+                                        Nächste Planung
+                                    </Typography>
+                                    <Box sx={{ position: 'relative', py: 2 }}>
+                                        <Typography variant="h3" sx={{ my: 2, fontWeight: 800, position: 'relative', zIndex: 1 }}>
+                                            {getDisplayName(drawnProposer)} ist dran!
+                                        </Typography>
+                                        <Typography variant="h1" sx={{ fontSize: { xs: '6rem', sm: '8rem' }, opacity: 0.15, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 0, fontWeight: 900 }}>
+                                            {drawnLetter}
+                                        </Typography>
+                                    </Box>
+                                    <Button
+                                        variant="contained"
+                                        size="large"
+                                        sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: '#d84315 !important', fontWeight: 900, px: 4, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' }, mt: 2 }}
+                                        onClick={() => navigate(`/letter/${drawnLetter}`)}
+                                    >
+                                        Jetzt planen
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        </motion.div>
                     ) : (
-                        <>
-                            <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
-                                {currentRound.proposalText}
-                            </Typography>
-                            {currentRound.date && (
-                                <Typography variant="h6" sx={{ opacity: 0.9, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-                                    <ActivityIcon /> {new Date(currentRound.date).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })}
-                                </Typography>
-                            )}
-                        </>
+                        /* Phase 0 (idle) + Phase 1 (spinning) + Phase 2 (revealed) */
+                        <motion.div
+                            key="draw-card"
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ duration: 0.4 }}
+                        >
+                            <Card sx={{
+                                mb: 6,
+                                background: 'linear-gradient(135deg, #00BCD4 0%, #7C4DFF 100%)',
+                                color: 'white',
+                                position: 'relative',
+                                overflow: 'hidden'
+                            }}>
+                                <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                                    <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
+                                        Zufallsmodus
+                                    </Typography>
+
+                                    {animationPhase === 'spinning' ? (
+                                        /* Spinning letters */
+                                        <Box sx={{ py: 3, minHeight: 160, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                                            <AnimatePresence mode="wait">
+                                                <motion.div
+                                                    key={spinLetter}
+                                                    initial={{ y: -30, opacity: 0 }}
+                                                    animate={{ y: 0, opacity: 1 }}
+                                                    exit={{ y: 30, opacity: 0 }}
+                                                    transition={{ duration: 0.06 }}
+                                                >
+                                                    <Typography variant="h1" sx={{
+                                                        fontSize: { xs: '7rem', sm: '9rem' },
+                                                        fontWeight: 900,
+                                                        lineHeight: 1,
+                                                        fontFamily: '"Inter", sans-serif'
+                                                    }}>
+                                                        {spinLetter}
+                                                    </Typography>
+                                                </motion.div>
+                                            </AnimatePresence>
+                                        </Box>
+                                    ) : animationPhase === 'revealed' ? (
+                                        /* Revealed letter with glow */
+                                        <Box sx={{ py: 3, minHeight: 160, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                                            <motion.div
+                                                initial={{ scale: 0.5, opacity: 0 }}
+                                                animate={{ scale: 1, opacity: 1 }}
+                                                transition={{ type: 'spring', stiffness: 300, damping: 12 }}
+                                            >
+                                                <Typography variant="h1" sx={{
+                                                    fontSize: { xs: '8rem', sm: '10rem' },
+                                                    fontWeight: 900,
+                                                    lineHeight: 1,
+                                                    textShadow: '0 0 60px rgba(255,255,255,0.6), 0 0 120px rgba(255,255,255,0.3)',
+                                                    fontFamily: '"Inter", sans-serif'
+                                                }}>
+                                                    {drawnLetter}
+                                                </Typography>
+                                            </motion.div>
+                                            <motion.div
+                                                initial={{ opacity: 0, y: 15 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: 0.4, duration: 0.5 }}
+                                            >
+                                                <Typography variant="h5" sx={{ mt: 2, fontWeight: 700 }}>
+                                                    🎉 Euer nächster Buchstabe!
+                                                </Typography>
+                                                <Typography variant="body1" sx={{ opacity: 0.85, mt: 1 }}>
+                                                    {getDisplayName(drawnProposer || '')} ist an der Reihe
+                                                </Typography>
+                                            </motion.div>
+                                        </Box>
+                                    ) : (
+                                        /* Idle state: draw prompt */
+                                        <Box sx={{ py: 3 }}>
+                                            <CasinoIcon sx={{ fontSize: 64, mb: 2, opacity: 0.8 }} />
+                                            <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>
+                                                Nächsten Buchstaben losen
+                                            </Typography>
+                                            <Typography variant="body2" sx={{ opacity: 0.8, mb: 3 }}>
+                                                {26 - drawnOrder.length} von 26 Buchstaben übrig
+                                            </Typography>
+                                        </Box>
+                                    )}
+
+                                    {animationPhase === 'idle' && (
+                                        <Stack spacing={1} alignItems="center">
+                                            <Button
+                                                variant="contained"
+                                                size="large"
+                                                startIcon={<CasinoIcon />}
+                                                disabled={!canDrawNext()}
+                                                onClick={handleDrawLetter}
+                                                sx={{
+                                                    backgroundColor: 'white !important',
+                                                    backgroundImage: 'none !important',
+                                                    color: '#7C4DFF !important',
+                                                    fontWeight: 900,
+                                                    px: 4,
+                                                    borderRadius: 3,
+                                                    boxShadow: '0 4px 14px 0 rgba(0,0,0,0.15)',
+                                                    textTransform: 'none',
+                                                    '&:hover': { backgroundColor: '#f5f5f5 !important' },
+                                                    '&.Mui-disabled': {
+                                                        backgroundColor: 'rgba(255,255,255,0.3) !important',
+                                                        color: 'rgba(255,255,255,0.7) !important'
+                                                    }
+                                                }}
+                                            >
+                                                Jetzt losen!
+                                            </Button>
+                                            {!canDrawNext() && lastDrawnRound && lastDrawnRound.status !== RoundStatus.Planned && lastDrawnRound.status !== RoundStatus.Done && (
+                                                <Typography variant="caption" sx={{ opacity: 0.8, mt: 1 }}>
+                                                    Der Buchstabe {lastDrawnLetter} muss erst geplant werden.
+                                                </Typography>
+                                            )}
+                                        </Stack>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </motion.div>
                     )}
+                </AnimatePresence>
+            )}
 
-                    <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
+            {/* ===== RANDOM MODE: Current round card (if drawn but not done) ===== */}
+            {isRandomMode && animationPhase === 'idle' && currentRound && currentRound.status !== RoundStatus.Done && (
+                <Card sx={{
+                    mb: 6,
+                    background: needsPlanning
+                        ? 'linear-gradient(135deg, #FF9800 0%, #F44336 100%)'
+                        : 'linear-gradient(135deg, #7C4DFF 0%, #B47CFF 100%)',
+                    color: 'white',
+                    position: 'relative',
+                    overflow: 'visible'
+                }}>
+                    <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                        <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
+                            {needsPlanning ? 'Nächste Planung' : 'Nächstes Event'}
+                        </Typography>
 
-                        {needsPlanning && !isProposer ? (
-                            <Button
-                                variant="contained"
-                                size="large"
-                                startIcon={<CampaignIcon />}
-                                sx={{
-                                    backgroundColor: 'white !important',
-                                    backgroundImage: 'none !important',
-                                    color: '#FF9800 !important', // Reminder orange
-                                    fontWeight: 900,
-                                    px: 4,
-                                    borderRadius: 3,
-                                    boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
-                                    textTransform: 'none',
-                                    '&:hover': { backgroundColor: '#f5f5f5 !important' }
-                                }}
-                                onClick={() => setShowRemindDialog(true)}
-                            >
-                                Person erinnern
-                            </Button>
+                        {needsPlanning ? (
+                            <Box sx={{ position: 'relative', py: 2 }}>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, position: 'relative', zIndex: 1 }}>
+                                    {getDisplayName(currentRound.proposerUserId)} ist dran!
+                                </Typography>
+                                <Typography variant="h1" sx={{ fontSize: { xs: '6rem', sm: '8rem' }, opacity: 0.15, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 0, fontWeight: 900 }}>
+                                    {currentRound.letter}
+                                </Typography>
+                            </Box>
                         ) : (
-                            <Button
-                                variant="contained"
-                                size="large"
-                                sx={{
-                                    backgroundColor: 'white !important',
-                                    backgroundImage: 'none !important',
-                                    color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important',
-                                    fontWeight: 900,
-                                    px: 4,
-                                    borderRadius: 3,
-                                    boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
-                                    textTransform: 'none',
-                                    '&:hover': { backgroundColor: '#f5f5f5 !important' }
-                                }}
-                                onClick={() => navigate(`/letter/${currentRound.letter}`)}
-                            >
-                                {isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}
-                            </Button>
+                            <>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
+                                    {currentRound.proposalText}
+                                </Typography>
+                                {currentRound.date && (
+                                    <Typography variant="h6" sx={{ opacity: 0.9, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                                        <ActivityIcon /> {new Date(currentRound.date).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })}
+                                    </Typography>
+                                )}
+                            </>
                         )}
-                        {!needsPlanning && (
-                            <Button
-                                variant="outlined"
-                                size="large"
-                                startIcon={<CheckCircleIcon />}
-                                sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
-                                onClick={() => handleMarkAsDone(currentRound)}
-                                disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
-                            >
-                                Als erledigt markieren
-                            </Button>
-                        )}
-                    </Stack>
-                </CardContent>
-            </Card>
 
+                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
+                            {needsPlanning && !isProposer ? (
+                                <Button
+                                    variant="contained" size="large" startIcon={<CampaignIcon />}
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: '#FF9800 !important', fontWeight: 900, px: 4, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
+                                    onClick={() => setShowRemindDialog(true)}
+                                >Person erinnern</Button>
+                            ) : (
+                                <Button
+                                    variant="contained" size="large"
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important', fontWeight: 900, px: 4, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
+                                    onClick={() => navigate(`/letter/${currentRound.letter}`)}
+                                >{isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}</Button>
+                            )}
+                            {!needsPlanning && (
+                                <Button
+                                    variant="outlined" size="large" startIcon={<CheckCircleIcon />}
+                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
+                                    onClick={() => handleMarkAsDone(currentRound)}
+                                    disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
+                                >Als erledigt markieren</Button>
+                            )}
+                        </Stack>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* ===== SEQUENTIAL MODE: Original hero card ===== */}
+            {!isRandomMode && currentRound && (
+                <Card sx={{
+                    mb: 6,
+                    background: needsPlanning
+                        ? 'linear-gradient(135deg, #FF9800 0%, #F44336 100%)'
+                        : 'linear-gradient(135deg, #7C4DFF 0%, #B47CFF 100%)',
+                    color: 'white',
+                    position: 'relative',
+                    overflow: 'visible'
+                }}>
+                    <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                        <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
+                            {needsPlanning ? 'Nächste Planung' : 'Nächstes Event'}
+                        </Typography>
+
+                        {needsPlanning ? (
+                            <Box sx={{ position: 'relative', py: 2 }}>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, position: 'relative', zIndex: 1 }}>
+                                    {getDisplayName(currentRound.proposerUserId)} ist dran!
+                                </Typography>
+                                <Typography variant="h1" sx={{ fontSize: { xs: '6rem', sm: '8rem' }, opacity: 0.15, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 0, fontWeight: 900 }}>
+                                    {currentRound.letter}
+                                </Typography>
+                            </Box>
+                        ) : (
+                            <>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
+                                    {currentRound.proposalText}
+                                </Typography>
+                                {currentRound.date && (
+                                    <Typography variant="h6" sx={{ opacity: 0.9, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                                        <ActivityIcon /> {new Date(currentRound.date).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })}
+                                    </Typography>
+                                )}
+                            </>
+                        )}
+
+                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
+
+                            {needsPlanning && !isProposer ? (
+                                <Button
+                                    variant="contained"
+                                    size="large"
+                                    startIcon={<CampaignIcon />}
+                                    sx={{
+                                        backgroundColor: 'white !important',
+                                        backgroundImage: 'none !important',
+                                        color: '#FF9800 !important',
+                                        fontWeight: 900,
+                                        px: 4,
+                                        borderRadius: 3,
+                                        boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
+                                        textTransform: 'none',
+                                        '&:hover': { backgroundColor: '#f5f5f5 !important' }
+                                    }}
+                                    onClick={() => setShowRemindDialog(true)}
+                                >
+                                    Person erinnern
+                                </Button>
+                            ) : (
+                                <Button
+                                    variant="contained"
+                                    size="large"
+                                    sx={{
+                                        backgroundColor: 'white !important',
+                                        backgroundImage: 'none !important',
+                                        color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important',
+                                        fontWeight: 900,
+                                        px: 4,
+                                        borderRadius: 3,
+                                        boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
+                                        textTransform: 'none',
+                                        '&:hover': { backgroundColor: '#f5f5f5 !important' }
+                                    }}
+                                    onClick={() => navigate(`/letter/${currentRound.letter}`)}
+                                >
+                                    {isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}
+                                </Button>
+                            )}
+                            {!needsPlanning && (
+                                <Button
+                                    variant="outlined"
+                                    size="large"
+                                    startIcon={<CheckCircleIcon />}
+                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
+                                    onClick={() => handleMarkAsDone(currentRound)}
+                                    disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
+                                >
+                                    Als erledigt markieren
+                                </Button>
+                            )}
+                        </Stack>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* ===== TIMELINE ===== */}
             <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <HistoryIcon /> Zeitstrahl
             </Typography>
-            <Card>
-                <List disablePadding>
-                    {rounds.map((round: LetterRound, index: number) => (
-                        <React.Fragment key={round.letter}>
-                            <ListItem disablePadding>
-                                <ListItemButton
-                                    onClick={() => navigate(`/letter/${round.letter}`)}
-                                    sx={{ py: 2 }}
-                                >
-                                    <Box sx={{
-                                        mr: 2,
-                                        width: 48,
-                                        height: 48,
-                                        borderRadius: '12px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        bgcolor: round.status === RoundStatus.Done ? 'success.light' :
-                                            round.status === RoundStatus.Planned ? 'primary.light' : 'grey.100',
-                                        color: round.status === RoundStatus.Done || round.status === RoundStatus.Planned ? 'white' : 'text.secondary'
-                                    }}>
-                                        <Typography variant="h6" sx={{ fontWeight: 700 }}>{round.letter}</Typography>
-                                    </Box>
-                                    <ListItemText
-                                        primary={
-                                            <Box display="flex" alignItems="center" gap={1}>
-                                                <Typography variant="subtitle1" component="span" sx={{ fontWeight: 700 }}>
-                                                    {getDisplayName(round.proposerUserId)}
-                                                </Typography>
-                                                <Chip
-                                                    size="small"
-                                                    label={getStatusLabel(round.status)}
-                                                    color={getStatusColor(round.status) as any}
-                                                    sx={{ fontSize: '0.65rem', height: 20 }}
-                                                />
-                                                {round.status === RoundStatus.Done && profile && !round.ratings?.[profile.email.toLowerCase().trim()] && (
+
+            {isRandomMode && timelineRounds.length === 0 && (
+                <Card sx={{ mb: 3 }}>
+                    <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                        <CasinoIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+                        <Typography variant="body1" color="text.secondary">
+                            Noch kein Buchstabe gezogen. Lose deinen ersten Buchstaben!
+                        </Typography>
+                    </CardContent>
+                </Card>
+            )}
+
+            {timelineRounds.length > 0 && (
+                <Card>
+                    <List disablePadding>
+                        {timelineRounds.map((round: LetterRound, index: number) => (
+                            <React.Fragment key={round.letter}>
+                                <ListItem disablePadding>
+                                    <ListItemButton
+                                        onClick={() => navigate(`/letter/${round.letter}`)}
+                                        sx={{ py: 2 }}
+                                    >
+                                        <Box sx={{
+                                            mr: 2,
+                                            width: 48,
+                                            height: 48,
+                                            borderRadius: '12px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            bgcolor: round.status === RoundStatus.Done ? 'success.light' :
+                                                round.status === RoundStatus.Planned ? 'primary.light' : 'grey.100',
+                                            color: round.status === RoundStatus.Done || round.status === RoundStatus.Planned ? 'white' : 'text.secondary'
+                                        }}>
+                                            <Typography variant="h6" sx={{ fontWeight: 700 }}>{round.letter}</Typography>
+                                        </Box>
+                                        <ListItemText
+                                            primary={
+                                                <Box display="flex" alignItems="center" gap={1}>
+                                                    <Typography variant="subtitle1" component="span" sx={{ fontWeight: 700 }}>
+                                                        {getDisplayName(round.proposerUserId)}
+                                                    </Typography>
                                                     <Chip
                                                         size="small"
-                                                        label="Deine Bewertung fehlt"
-                                                        color="warning"
-                                                        variant="outlined"
-                                                        sx={{ fontSize: '0.65rem', height: 20, fontWeight: 700 }}
+                                                        label={getStatusLabel(round.status)}
+                                                        color={getStatusColor(round.status) as any}
+                                                        sx={{ fontSize: '0.65rem', height: 20 }}
                                                     />
-                                                )}
-                                            </Box>
-                                        }
-                                        secondary={
-                                            <Box sx={{ mt: 0.5 }}>
-                                                <Typography variant="body1" color="text.primary" sx={{
-                                                    fontWeight: 500,
-                                                    overflow: 'hidden',
-                                                    textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap',
-                                                    maxWidth: { xs: '200px', sm: '100%' }
-                                                }}>
-                                                    {round.proposalText || ''}
-                                                </Typography>
-                                                {round.date && (
-                                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                                                        <ActivityIcon sx={{ fontSize: 14 }} /> {new Date(round.date).toLocaleDateString('de-DE')}
+                                                    {round.status === RoundStatus.Done && profile && !round.ratings?.[profile.email.toLowerCase().trim()] && (
+                                                        <Chip
+                                                            size="small"
+                                                            label="Deine Bewertung fehlt"
+                                                            color="warning"
+                                                            variant="outlined"
+                                                            sx={{ fontSize: '0.65rem', height: 20, fontWeight: 700 }}
+                                                        />
+                                                    )}
+                                                </Box>
+                                            }
+                                            secondary={
+                                                <Box sx={{ mt: 0.5 }}>
+                                                    <Typography variant="body1" color="text.primary" sx={{
+                                                        fontWeight: 500,
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis',
+                                                        whiteSpace: 'nowrap',
+                                                        maxWidth: { xs: '200px', sm: '100%' }
+                                                    }}>
+                                                        {round.proposalText || ''}
                                                     </Typography>
-                                                )}
-                                                {!!round.rating && round.rating > 0 && (
-                                                    <Box sx={{ display: 'flex', mt: 0.5 }}>
-                                                        {[1, 2, 3, 4, 5].map((star) => {
-                                                            const avg = round.rating || 0;
-                                                            const isHalf = avg >= star - 0.75 && avg < star - 0.25;
-                                                            const isFull = avg >= star - 0.25;
-                                                            return (
-                                                                <StarIcon
-                                                                    key={star}
-                                                                    sx={{
-                                                                        fontSize: 16,
-                                                                        color: isFull || isHalf ? '#FFD700' : 'grey.300',
-                                                                        opacity: isFull ? 1 : isHalf ? 0.7 : 1
-                                                                    }}
-                                                                />
-                                                            );
-                                                        })}
-                                                    </Box>
-                                                )}
-                                            </Box>
-                                        }
-                                    />
-                                    {round.status === RoundStatus.Done ? <TrophyIcon color="success" /> :
-                                        round.status === RoundStatus.Planned ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
-                                </ListItemButton>
-                            </ListItem>
-                            {index < rounds.length - 1 && <Divider />}
-                        </React.Fragment>
-                    ))}
-                </List>
-            </Card>
+                                                    {round.date && (
+                                                        <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                                                            <ActivityIcon sx={{ fontSize: 14 }} /> {new Date(round.date).toLocaleDateString('de-DE')}
+                                                        </Typography>
+                                                    )}
+                                                    {!!round.rating && round.rating > 0 && (
+                                                        <Box sx={{ display: 'flex', mt: 0.5 }}>
+                                                            {[1, 2, 3, 4, 5].map((star) => {
+                                                                const avg = round.rating || 0;
+                                                                const isHalf = avg >= star - 0.75 && avg < star - 0.25;
+                                                                const isFull = avg >= star - 0.25;
+                                                                return (
+                                                                    <StarIcon
+                                                                        key={star}
+                                                                        sx={{
+                                                                            fontSize: 16,
+                                                                            color: isFull || isHalf ? '#FFD700' : 'grey.300',
+                                                                            opacity: isFull ? 1 : isHalf ? 0.7 : 1
+                                                                        }}
+                                                                    />
+                                                                );
+                                                            })}
+                                                        </Box>
+                                                    )}
+                                                </Box>
+                                            }
+                                        />
+                                        {round.status === RoundStatus.Done ? <TrophyIcon color="success" /> :
+                                            round.status === RoundStatus.Planned ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
+                                    </ListItemButton>
+                                </ListItem>
+                                {index < timelineRounds.length - 1 && <Divider />}
+                            </React.Fragment>
+                        ))}
+                    </List>
+                </Card>
+            )}
+
             <Dialog open={!!ratingRound} onClose={() => setRatingRound(null)} PaperProps={{ sx: { borderRadius: 4 } }}>
                 <DialogTitle sx={{ fontWeight: 700, textAlign: 'center' }}>Wie war das Event?</DialogTitle>
                 <DialogContent sx={{ display: 'flex', justifyContent: 'center', pb: 4, pt: 1 }}>
@@ -466,46 +825,48 @@ const Home: React.FC = () => {
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={showRemindDialog} onClose={() => setShowRemindDialog(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
-                <DialogTitle sx={{ fontWeight: 800 }}>Partner erinnern</DialogTitle>
-                <DialogContent>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                        Wie möchtest du {getDisplayName(currentRound.proposerUserId)} an den Buchstaben <strong>{currentRound.letter}</strong> erinnern?
-                    </Typography>
-                    <Stack spacing={2}>
-                        <Button
-                            fullWidth
-                            variant="contained"
-                            startIcon={<WhatsAppIcon />}
-                            onClick={() => handleRemind('whatsapp')}
-                            sx={{ bgcolor: '#25D366', '&:hover': { bgcolor: '#128C7E' }, fontWeight: 700, borderRadius: 2 }}
-                        >
-                            Per WhatsApp
-                        </Button>
-                        <Button
-                            fullWidth
-                            variant="outlined"
-                            startIcon={<EmailIcon />}
-                            onClick={() => handleRemind('email')}
-                            sx={{ fontWeight: 700, borderRadius: 2 }}
-                        >
-                            Per E-Mail
-                        </Button>
-                        <Button
-                            fullWidth
-                            variant="outlined"
-                            startIcon={<CopyIcon />}
-                            onClick={handleCopyLink}
-                            sx={{ fontWeight: 700, borderRadius: 2 }}
-                        >
-                            Link kopieren
-                        </Button>
-                    </Stack>
-                </DialogContent>
-                <DialogActions sx={{ px: 3, pb: 2 }}>
-                    <Button onClick={() => setShowRemindDialog(false)} color="inherit" sx={{ fontWeight: 700 }}>Abbrechen</Button>
-                </DialogActions>
-            </Dialog>
+            {currentRound && (
+                <Dialog open={showRemindDialog} onClose={() => setShowRemindDialog(false)} PaperProps={{ sx: { borderRadius: 4, p: 1 } }}>
+                    <DialogTitle sx={{ fontWeight: 800 }}>Partner erinnern</DialogTitle>
+                    <DialogContent>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                            Wie möchtest du {getDisplayName(currentRound.proposerUserId)} an den Buchstaben <strong>{currentRound.letter}</strong> erinnern?
+                        </Typography>
+                        <Stack spacing={2}>
+                            <Button
+                                fullWidth
+                                variant="contained"
+                                startIcon={<WhatsAppIcon />}
+                                onClick={() => handleRemind('whatsapp')}
+                                sx={{ bgcolor: '#25D366', '&:hover': { bgcolor: '#128C7E' }, fontWeight: 700, borderRadius: 2 }}
+                            >
+                                Per WhatsApp
+                            </Button>
+                            <Button
+                                fullWidth
+                                variant="outlined"
+                                startIcon={<EmailIcon />}
+                                onClick={() => handleRemind('email')}
+                                sx={{ fontWeight: 700, borderRadius: 2 }}
+                            >
+                                Per E-Mail
+                            </Button>
+                            <Button
+                                fullWidth
+                                variant="outlined"
+                                startIcon={<CopyIcon />}
+                                onClick={handleCopyLink}
+                                sx={{ fontWeight: 700, borderRadius: 2 }}
+                            >
+                                Link kopieren
+                            </Button>
+                        </Stack>
+                    </DialogContent>
+                    <DialogActions sx={{ px: 3, pb: 2 }}>
+                        <Button onClick={() => setShowRemindDialog(false)} color="inherit" sx={{ fontWeight: 700 }}>Abbrechen</Button>
+                    </DialogActions>
+                </Dialog>
+            )}
 
             <Snackbar open={showRemindCopySuccess} autoHideDuration={3000} onClose={() => setShowRemindCopySuccess(false)}>
                 <Alert severity="success" sx={{ borderRadius: 2 }}>Link in die Zwischenablage kopiert!</Alert>

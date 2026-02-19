@@ -5,6 +5,7 @@ export interface UserProfile {
     email: string;
     environmentId: string;
     displayName: string;
+    age?: number;
 }
 
 export interface Environment {
@@ -15,6 +16,8 @@ export interface Environment {
     memberOrder?: string[]; // The sequence of emails for rounds
     startingPersonEmail: string;
     adminEmail: string; // The user who manages the environment
+    abcMode?: 'sequential' | 'random'; // How letters are assigned
+    drawnOrder?: string[]; // Letters already drawn in random mode, e.g. ['M', 'F', 'T']
     createdAt: string;
 }
 

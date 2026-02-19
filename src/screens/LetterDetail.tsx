@@ -91,7 +91,7 @@ const LetterDetail: React.FC = () => {
     const handleAiGenerate = async () => {
         if (!letter || !environment) return;
         setLoadingAI(true);
-        const ideas = await aiService.generateIdeas(environment.id, letter);
+        const ideas = await aiService.generateIdeas(environment.id, letter, undefined, round?.proposerUserId);
         setAiSuggestions(ideas);
         setLoadingAI(false);
     };

@@ -111,10 +111,11 @@ export const storage = {
         }
     },
 
-    async getPreferences(envId: string): Promise<UserPreferences | null> {
-        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}`;
+    async getPreferences(envId: string, userEmail?: string): Promise<UserPreferences | null> {
+        const emailKey = userEmail ? userEmail.toLowerCase().trim().replace(/\./g, '_') : 'main';
+        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}_${emailKey}`;
         try {
-            const docRef = doc(db, 'environments', envId, 'preferences', 'main');
+            const docRef = doc(db, 'environments', envId, 'preferences', emailKey);
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
                 const data = docSnap.data() as UserPreferences;
@@ -127,11 +128,12 @@ export const storage = {
         return await localforage.getItem<UserPreferences>(prefKey);
     },
 
-    async savePreferences(envId: string, preferences: UserPreferences): Promise<void> {
-        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}`;
+    async savePreferences(envId: string, preferences: UserPreferences, userEmail?: string): Promise<void> {
+        const emailKey = userEmail ? userEmail.toLowerCase().trim().replace(/\./g, '_') : 'main';
+        const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}_${emailKey}`;
         await localforage.setItem(prefKey, preferences);
         try {
-            await setDoc(doc(db, 'environments', envId, 'preferences', 'main'), preferences);
+            await setDoc(doc(db, 'environments', envId, 'preferences', emailKey), preferences);
         } catch (e) {
             console.error('Error saving preferences to Firestore:', e);
         }
@@ -204,11 +206,70 @@ export const storage = {
         const updated = current.filter(i => i.id !== ideaId);
         await localforage.setItem(key, updated);
         try {
-            const batch = writeBatch(db); // For future bulk deletes if needed
+            // const batch = writeBatch(db); // For future bulk deletes if needed
             const ref = doc(db, 'environments', envId, 'savedIdeas', ideaId);
             await setDoc(ref, {}); // Or deleteDoc if available in current scope
             // Note: Using setDoc with {} as a simple mock for delete if deleteDoc isn't imported
             // But let's assume we want real delete for Firestore consistency
         } catch (e) { console.error('Error deleting idea:', e); }
+    },
+
+    async reassignUpcomingProposers(envId: string, memberOrder: string[]): Promise<void> {
+        const rounds = await this.getRounds(envId);
+        if (rounds.length === 0 || memberOrder.length === 0) return;
+
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+        const updatedRounds = rounds.map((round) => {
+            // Only reassign rounds that haven't been started/planned/done
+            if (round.status === RoundStatus.NotStarted) {
+                const alphabetIndex = alphabet.indexOf(round.letter);
+                if (alphabetIndex !== -1) {
+                    return {
+                        ...round,
+                        proposerUserId: memberOrder[alphabetIndex % memberOrder.length],
+                        updatedAt: new Date().toISOString()
+                    };
+                }
+            }
+            return round;
+        });
+
+        await this.saveRounds(envId, updatedRounds);
+    },
+
+    async drawNextLetter(envId: string, drawnOrder: string[], memberOrder: string[]): Promise<{ letter: string; round: LetterRound } | null> {
+        const rounds = await this.getRounds(envId);
+        if (rounds.length === 0 || memberOrder.length === 0) return null;
+
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+        const drawnSet = new Set(drawnOrder);
+        const remaining = alphabet.filter(l => !drawnSet.has(l));
+        if (remaining.length === 0) return null;
+
+        // Pick a random letter from remaining
+        const randomIndex = Math.floor(Math.random() * remaining.length);
+        const chosenLetter = remaining[randomIndex];
+
+        // The proposer is determined by the position in the drawn sequence
+        const proposerIndex = drawnOrder.length % memberOrder.length;
+        const proposerEmail = memberOrder[proposerIndex];
+
+        // Update the round
+        const updatedRounds = rounds.map(r => {
+            if (r.letter === chosenLetter) {
+                return {
+                    ...r,
+                    proposerUserId: proposerEmail,
+                    status: RoundStatus.NotStarted,
+                    updatedAt: new Date().toISOString()
+                };
+            }
+            return r;
+        });
+
+        await this.saveRounds(envId, updatedRounds);
+
+        const updatedRound = updatedRounds.find(r => r.letter === chosenLetter)!;
+        return { letter: chosenLetter, round: updatedRound };
     }
 };

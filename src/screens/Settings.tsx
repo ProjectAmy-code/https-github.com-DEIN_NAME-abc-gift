@@ -3,9 +3,9 @@ import { Container, Typography, Card, CardContent, Button, Box, Alert, Snackbar,
 import { useNavigate } from 'react-router-dom';
 import { storage } from '../storage';
 import { auth, db } from '../firebase';
-import { Delete as DeleteIcon, Email as MailIcon, ArrowUpward as UpIcon, ArrowDownward as DownIcon, ChevronRight as ChevronRightIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Email as MailIcon, ArrowUpward as UpIcon, ArrowDownward as DownIcon, ChevronRight as ChevronRightIcon, Shuffle as ShuffleIcon, Sort as SortIcon } from '@mui/icons-material';
 import { useAuth } from '../context/useAuth';
-import { collection, query, where, getDocs, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import type { AppSettings, UserProfile, UserPreferences } from '../types';
 
 const Settings: React.FC = () => {
@@ -16,6 +16,8 @@ const Settings: React.FC = () => {
     const [expanded, setExpanded] = useState(false);
     const [memberProfiles, setMemberProfiles] = useState<Record<string, UserProfile>>({});
     const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+    const [myName, setMyName] = useState('');
+    const [myAge, setMyAge] = useState<string>('');
     const navigate = useNavigate();
 
     const normalizedUserEmail = profile?.email.toLowerCase().trim();
@@ -26,7 +28,7 @@ const Settings: React.FC = () => {
     useEffect(() => {
         if (environment?.id) {
             storage.getSettings(environment.id).then(setSettings);
-            storage.getPreferences(environment.id).then(setPreferences);
+            storage.getPreferences(environment.id, profile?.email).then(setPreferences);
 
             // Fetch profiles for all members
             const fetchProfiles = async () => {
@@ -59,6 +61,41 @@ const Settings: React.FC = () => {
                 setMemberProfiles(profiles);
             };
             fetchProfiles();
+
+            // Load own display name and age
+            if (profile) {
+                const normalizedKey = profile.email.toLowerCase().trim().replace(/\./g, '_');
+                setMyName(environment.memberNames?.[normalizedKey] || profile.email);
+                getDoc(doc(db, 'users', profile.uid)).then(snap => {
+                    if (snap.exists() && snap.data().age) {
+                        setMyAge(String(snap.data().age));
+                    }
+                }).catch(() => { });
+            }
+
+            // CLEANUP: Ensure memberOrder only contains emails that are in memberEmails
+            if (isAdmin && environment.memberOrder) {
+                const normalizedMemberEmails = new Set(environment.memberEmails.map((e: string) => e.toLowerCase().trim()));
+                const cleanedOrder = environment.memberOrder.filter((e: string) => normalizedMemberEmails.has(e.toLowerCase().trim()));
+                // Add any memberEmails that are missing from memberOrder
+                for (const email of environment.memberEmails) {
+                    const norm = email.toLowerCase().trim();
+                    if (!cleanedOrder.some((e: string) => e.toLowerCase().trim() === norm)) {
+                        cleanedOrder.push(norm);
+                    }
+                }
+                // If order changed, persist the cleanup
+                const orderChanged = cleanedOrder.length !== environment.memberOrder.length ||
+                    cleanedOrder.some((e: string, i: number) => e !== environment.memberOrder![i]);
+                if (orderChanged) {
+                    updateDoc(doc(db, 'environments', environment.id), {
+                        memberOrder: cleanedOrder
+                    }).then(() => {
+                        // Also re-assign proposers for future rounds
+                        storage.reassignUpcomingProposers(environment.id, cleanedOrder);
+                    }).catch(err => console.error("MemberOrder cleanup failed:", err));
+                }
+            }
 
             // DATA MIGRATION: Ensure emails are lowercase in DB (helps future queries)
             // 1. Environment Migration (More aggressive: rebuild memberNames & memberEmails)
@@ -122,8 +159,13 @@ const Settings: React.FC = () => {
     const handleReset = async () => {
         if (!environment || !settings) return;
         setIsResetting(true);
-        const sequence = environment.memberOrder || environment.memberEmails;
-        await storage.resetRounds(environment.id, environment.memberEmails, sequence[0], environment.memberOrder);
+        // Sync memberOrder to current memberEmails and clear drawnOrder before resetting
+        const cleanedOrder = environment.memberEmails.map((e: string) => e.toLowerCase().trim());
+        await updateDoc(doc(db, 'environments', environment.id), {
+            memberOrder: cleanedOrder,
+            drawnOrder: []
+        });
+        await storage.resetRounds(environment.id, environment.memberEmails, cleanedOrder[0], cleanedOrder);
         navigate('/');
     };
 
@@ -158,6 +200,18 @@ const Settings: React.FC = () => {
                 }
             }
 
+            // 2. Re-assign upcoming proposers for future rounds
+            // Ensure we use memberOrder if it exists, otherwise memberEmails, then filter
+            const currentOrder = environment.memberOrder || environment.memberEmails;
+            const updatedOrder = currentOrder.filter((e: string) => e.toLowerCase().trim() !== normalizedEmail);
+
+            // Update memberOrder in DB as well to keep it in sync
+            await updateDoc(envRef, {
+                memberOrder: updatedOrder
+            });
+
+            await storage.reassignUpcomingProposers(environment.id, updatedOrder);
+
             setShowDeleteDialog({ open: false, email: '' });
             window.location.reload();
         } catch (e) {
@@ -180,6 +234,7 @@ const Settings: React.FC = () => {
         try {
             const envRef = doc(db, 'environments', environment.id);
             await updateDoc(envRef, { memberOrder: newOrder });
+            await storage.reassignUpcomingProposers(environment.id, newOrder);
         } catch (e) {
             console.error('Error updating member order:', e);
         }
@@ -219,6 +274,17 @@ const Settings: React.FC = () => {
                 [`memberNames.${email.replace(/\./g, '_')}`]: email // placeholder name
             });
 
+            // 2. Re-assign upcoming proposers for future rounds
+            const currentOrder = environment.memberOrder || environment.memberEmails;
+            const updatedOrder = [...currentOrder, email];
+
+            // Update memberOrder in DB as well to keep it in sync
+            await updateDoc(envRef, {
+                memberOrder: updatedOrder
+            });
+
+            await storage.reassignUpcomingProposers(environment.id, updatedOrder);
+
             // 2. NOTE: We REMOVED the automatic update of existing user profiles.
             // Existing users will now see an invitation dialog on Home and have IT accept it explicitly.
 
@@ -242,7 +308,7 @@ const Settings: React.FC = () => {
         if (!environment || !preferences) return;
         const newPrefs = { ...preferences, ...updates };
         setPreferences(newPrefs);
-        await storage.savePreferences(environment.id, newPrefs);
+        await storage.savePreferences(environment.id, newPrefs, profile?.email);
         setShowSaved(true);
     };
 
@@ -270,6 +336,47 @@ const Settings: React.FC = () => {
     return (
         <Container maxWidth="sm" sx={{ py: 4 }}>
             <Typography variant="h4" gutterBottom sx={{ fontWeight: 500 }}>Einstellungen</Typography>
+
+            {/* ===== MEIN PROFIL (for ALL users) ===== */}
+            <Card sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="h6" gutterBottom>Mein Profil</Typography>
+                    <Stack spacing={2}>
+                        <TextField
+                            fullWidth
+                            label="Dein Name"
+                            value={myName}
+                            onChange={(e) => setMyName(e.target.value)}
+                            size="small"
+                            onBlur={async () => {
+                                if (!environment || !profile || !myName.trim()) return;
+                                const normalizedKey = profile.email.toLowerCase().trim().replace(/\./g, '_');
+                                await updateDoc(doc(db, 'environments', environment.id), {
+                                    [`memberNames.${normalizedKey}`]: myName.trim()
+                                });
+                                setShowSaved(true);
+                            }}
+                        />
+                        <TextField
+                            fullWidth
+                            label="Dein Alter"
+                            value={myAge}
+                            onChange={(e) => setMyAge(e.target.value.replace(/[^0-9]/g, ''))}
+                            size="small"
+                            type="number"
+                            inputProps={{ min: 1, max: 120 }}
+                            helperText="Wichtig für personalisierte KI-Vorschläge"
+                            onBlur={async () => {
+                                if (!profile || !myAge) return;
+                                await updateDoc(doc(db, 'users', profile.uid), {
+                                    age: parseInt(myAge)
+                                });
+                                setShowSaved(true);
+                            }}
+                        />
+                    </Stack>
+                </CardContent>
+            </Card>
 
             <Card sx={{ mb: 3, border: expanded ? '1px solid' : 'none', borderColor: 'divider', transition: 'all 0.3s ease' }}>
                 <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>
@@ -477,12 +584,61 @@ const Settings: React.FC = () => {
             {isAdmin && (
                 <Card sx={{ mb: 3 }}>
                     <CardContent>
+                        <Typography variant="h6" gutterBottom>ABC Modus</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                            Wähle, wie die Buchstaben durchgegangen werden.
+                        </Typography>
+                        <ToggleButtonGroup
+                            fullWidth
+                            size="small"
+                            value={environment.abcMode || 'sequential'}
+                            exclusive
+                            onChange={async (_, v) => {
+                                if (!v || !environment) return;
+                                try {
+                                    await updateDoc(doc(db, 'environments', environment.id), {
+                                        abcMode: v,
+                                        ...(v === 'random' && !environment.drawnOrder ? { drawnOrder: [] } : {})
+                                    });
+                                    setShowSaved(true);
+                                } catch (e) {
+                                    console.error('Error saving ABC mode:', e);
+                                }
+                            }}
+                        >
+                            <ToggleButton value="sequential" sx={{ gap: 1 }}>
+                                <SortIcon fontSize="small" /> Der Reihe nach
+                            </ToggleButton>
+                            <ToggleButton value="random" sx={{ gap: 1 }}>
+                                <ShuffleIcon fontSize="small" /> Zufällig
+                            </ToggleButton>
+                        </ToggleButtonGroup>
+                    </CardContent>
+                </Card>
+            )}
+
+            {isAdmin && (
+                <Card sx={{ mb: 3 }}>
+                    <CardContent>
                         <Typography variant="h6" gutterBottom>Runden-Reihenfolge</Typography>
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
                             Lege fest, in welcher Reihenfolge die Mitglieder für Vorschläge an der Reihe sind.
                         </Typography>
                         <List sx={{ bgcolor: 'action.hover', borderRadius: 1 }}>
-                            {(environment.memberOrder || environment.memberEmails).map((email: string, index: number, arr: string[]) => (
+                            {(() => {
+                                // Compute effective member order: filter memberOrder to only include actual members
+                                const normalizedMemberEmails = new Set(environment.memberEmails.map((e: string) => e.toLowerCase().trim()));
+                                const baseOrder = environment.memberOrder || environment.memberEmails;
+                                const effectiveOrder = baseOrder.filter((e: string) => normalizedMemberEmails.has(e.toLowerCase().trim()));
+                                // Add any memberEmails missing from the order
+                                for (const email of environment.memberEmails) {
+                                    const norm = email.toLowerCase().trim();
+                                    if (!effectiveOrder.some((e: string) => e.toLowerCase().trim() === norm)) {
+                                        effectiveOrder.push(norm);
+                                    }
+                                }
+                                return effectiveOrder;
+                            })().map((email: string, index: number, arr: string[]) => (
                                 <ListItem
                                     key={email}
                                     secondaryAction={
@@ -514,9 +670,6 @@ const Settings: React.FC = () => {
                                 </ListItem>
                             ))}
                         </List>
-                        <Typography variant="caption" color="info.main" sx={{ mt: 2, display: 'block', fontStyle: 'italic' }}>
-                            Änderungen werden beim nächsten "Gesamten Fortschritt zurücksetzen" wirksam.
-                        </Typography>
                     </CardContent>
                 </Card>
             )}
@@ -686,9 +839,11 @@ const Settings: React.FC = () => {
                 </DialogActions>
             </Dialog>
 
-            <Button color="error" fullWidth onClick={() => setShowResetDialog(true)} sx={{ mt: 2, fontWeight: 700 }}>
-                Gesamten Fortschritt zurücksetzen
-            </Button>
+            {isAdmin && (
+                <Button color="error" fullWidth onClick={() => setShowResetDialog(true)} sx={{ mt: 2, fontWeight: 700 }}>
+                    Gesamten Fortschritt zurücksetzen
+                </Button>
+            )}
 
             <Box sx={{ mt: 6, pt: 4, borderTop: '1px solid', borderColor: 'divider' }}>
                 <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center', mb: 2 }}>

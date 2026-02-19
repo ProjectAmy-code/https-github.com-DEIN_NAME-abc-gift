@@ -23,9 +23,10 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
         return <Navigate to="/verify-email" replace />;
     }
 
-    // Redirect admins to welcome if portal name is missing
+    // Redirect admins to welcome only for brand-new portals (created within last 5 min and no name)
     const isAdmin = profile?.email?.toLowerCase().trim() === environment?.adminEmail?.toLowerCase().trim();
-    if (isAdmin && !environment?.name && location.pathname !== '/welcome') {
+    const isNewEnvironment = environment?.createdAt && (Date.now() - new Date(environment.createdAt).getTime() < 5 * 60 * 1000);
+    if (isAdmin && !environment?.name && isNewEnvironment && location.pathname !== '/welcome') {
         return <Navigate to="/welcome" replace />;
     }
 

@@ -32,7 +32,7 @@ const STYLES = ['Entspannung', 'Essen & Trinken', 'Kultur', 'Natur', 'Sport', 'K
 const NO_GOS = ['Kino', 'Restaurant', 'Wandern', 'Bars/Alkohol', 'Menschenmengen', 'Lautstärke', 'Teuer', 'Lange Fahrtzeit', 'Sportlich'];
 
 const Onboarding: React.FC = () => {
-    const { environment, loading: authLoading } = useAuth();
+    const { profile, environment, loading: authLoading } = useAuth();
     const navigate = useNavigate();
     const [activeStep, setActiveStep] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -60,7 +60,7 @@ const Onboarding: React.FC = () => {
             navigate('/login');
         } else if (environment) {
             // Load existing preferences if available
-            storage.getPreferences(environment.id).then(existingPrefs => {
+            storage.getPreferences(environment.id, profile?.email).then(existingPrefs => {
                 if (existingPrefs) {
                     setPrefs(prev => ({ ...prev, ...existingPrefs }));
                 }
@@ -89,7 +89,7 @@ const Onboarding: React.FC = () => {
                 ...prefs,
                 completedAt: new Date().toISOString()
             };
-            await storage.savePreferences(environment.id, completedPrefs);
+            await storage.savePreferences(environment.id, completedPrefs, profile?.email);
             navigate('/');
         } catch (err) {
             console.error('Error saving preferences:', err);
@@ -103,7 +103,7 @@ const Onboarding: React.FC = () => {
         setGeneratingPreview(true);
         try {
             // Reale KI-Ideen generieren (Buchstabe A für die Vorschau)
-            const ideas = await aiService.generateIdeas(environment.id, 'A', prefs);
+            const ideas = await aiService.generateIdeas(environment.id, 'A', prefs, profile?.email);
             setPreviewIdeas(ideas);
         } catch (err) {
             console.error('Error generating AI preview:', err);

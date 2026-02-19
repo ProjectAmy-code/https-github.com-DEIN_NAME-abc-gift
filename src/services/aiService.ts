@@ -1,16 +1,16 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AI_ACTIVITIES } from './aiData';
 import { storage } from '../storage';
-import type { UserPreferences, AIIdea, AIProfile } from '../types';
+import type { UserPreferences, AIIdea } from '../types';
 
 // Initialize Gemini API (API Key is provided via Vite env variables)
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
 export const aiService = {
-    async generateIdeas(envId: string, letter: string, overridePrefs?: UserPreferences): Promise<AIIdea[]> {
+    async generateIdeas(envId: string, letter: string, overridePrefs?: UserPreferences, proposerEmail?: string): Promise<AIIdea[]> {
         const settings = await storage.getSettings(envId);
-        const prefs = overridePrefs || await storage.getPreferences(envId);
+        const prefs = overridePrefs || await storage.getPreferences(envId, proposerEmail);
         const aiProfile = await storage.getAIProfile(envId);
         const letterKey = letter.toUpperCase();
 
