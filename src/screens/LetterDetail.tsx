@@ -400,30 +400,34 @@ const LetterDetail: React.FC = () => {
             </Card>
 
             <Stack spacing={2}>
-                <Button
-                    variant="contained"
-                    fullWidth
-                    size="large"
-                    startIcon={<SaveIcon />}
-                    disabled={!canEdit || !canConfirm || round.status === RoundStatus.Planned}
-                    onClick={async () => {
-                        await updateRoundImmediate({ status: RoundStatus.Planned });
-                        navigate('/');
-                    }}
-                >
-                    Planung abschließen
-                </Button>
-                <Button
-                    variant="outlined"
-                    fullWidth
-                    size="large"
-                    color="success"
-                    startIcon={<CheckCircleIcon />}
-                    disabled={round.status !== RoundStatus.Planned || (profile?.email?.toLowerCase().trim() !== round.proposerUserId?.toLowerCase().trim())}
-                    onClick={() => updateRoundImmediate({ status: RoundStatus.Done })}
-                >
-                    Als erledigt markieren
-                </Button>
+                {round.status !== RoundStatus.Planned && round.status !== RoundStatus.Done && (
+                    <Button
+                        variant="contained"
+                        fullWidth
+                        size="large"
+                        startIcon={<SaveIcon />}
+                        disabled={!canEdit || !canConfirm}
+                        onClick={async () => {
+                            await updateRoundImmediate({ status: RoundStatus.Planned });
+                            navigate('/');
+                        }}
+                    >
+                        Planung abschließen
+                    </Button>
+                )}
+                {round.status === RoundStatus.Planned && (
+                    <Button
+                        variant="outlined"
+                        fullWidth
+                        size="large"
+                        color="success"
+                        startIcon={<CheckCircleIcon />}
+                        disabled={profile?.email?.toLowerCase().trim() !== round.proposerUserId?.toLowerCase().trim()}
+                        onClick={() => updateRoundImmediate({ status: RoundStatus.Done })}
+                    >
+                        Als erledigt markieren
+                    </Button>
+                )}
 
                 {round.status === RoundStatus.Done && (
                     <Card sx={{ mb: 3 }}>

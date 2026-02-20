@@ -31,3 +31,7 @@ firebase-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Test files with API keys
+test_gemini.ts
+test_*.ts

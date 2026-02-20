@@ -8,4 +8,4 @@
  * PATCH  – Increments with every prompt / change (e.g. 1.0.0 → 1.0.1)
  */
 
-export const APP_VERSION = 'V1.1.0';
+export const APP_VERSION = 'V1.1.1';
