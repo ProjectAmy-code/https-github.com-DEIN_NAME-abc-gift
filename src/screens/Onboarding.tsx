@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
     Container, Box, Typography, TextField, Button, CircularProgress, Stack,
     Stepper, Step, StepLabel, Slider, Chip, Switch, FormControlLabel,
-    ToggleButton, ToggleButtonGroup, List, ListItem, ListItemText,
+    List, ListItem, ListItemText,
     ListItemIcon
 } from '@mui/material';
 import {
@@ -15,7 +15,6 @@ import {
     CheckCircle as CheckIcon,
     WbSunny as OutdoorIcon,
     MeetingRoom as IndoorIcon,
-    CompareArrows as MixIcon,
     DirectionsCar as CarIcon,
     ChildCare as KidsIcon,
     CloudQueue as RainIcon
@@ -28,8 +27,8 @@ import type { UserPreferences } from '../types';
 
 const STEPS = ['Basics', 'Budget & Zeit', 'Stil & Rahmen', 'No-Gos & Start'];
 
-const STYLES = ['Entspannung', 'Essen & Trinken', 'Kultur', 'Natur', 'Sport', 'Kreativ', 'Abenteuer', 'Nur Zuhause'];
-const NO_GOS = ['Kino', 'Restaurant', 'Wandern', 'Bars/Alkohol', 'Menschenmengen', 'Lautstärke', 'Teuer', 'Lange Fahrtzeit', 'Sportlich'];
+const STYLES = ['Entspannung', 'Essen & Trinken', 'Kultur', 'Natur', 'Sport', 'Kreativ', 'Abenteuer', 'Nur Zuhause', 'Romantik', 'Action', 'Wellness', 'Lernen'];
+const NO_GOS = ['Kino', 'Restaurant', 'Wandern', 'Bars/Alkohol', 'Menschenmengen', 'Lautstärke', 'Teuer', 'Lange Fahrtzeit', 'Sportlich', 'Spaßbad', 'Tiere', 'Drecksarbeit'];
 
 const Onboarding: React.FC = () => {
     const { profile, environment, loading: authLoading } = useAuth();
@@ -41,13 +40,12 @@ const Onboarding: React.FC = () => {
 
     const [prefs, setPrefs] = useState<UserPreferences>({
         radiusKm: 25,
-        planningDays: 'both',
-        language: 'de',
-        budgetTier: 'medium',
-        durationTier: '60-120',
-        timeOfDay: 'evening',
+        planningDays: ['both'],
+        budgetTier: ['medium'],
+        durationTier: ['60-120'],
+        timeOfDay: ['evening'],
         styles: [],
-        indoorOutdoor: 'mix',
+        indoorOutdoor: ['mix'],
         rainRulePreferIndoor: true,
         carAvailable: false,
         kidsIncluded: false,
@@ -103,8 +101,11 @@ const Onboarding: React.FC = () => {
         setGeneratingPreview(true);
         try {
             // Reale KI-Ideen generieren (Buchstabe A für die Vorschau)
-            const ideas = await aiService.generateIdeas(environment.id, 'A', prefs, profile?.email);
-            setPreviewIdeas(ideas);
+            setPreviewIdeas([]);
+            const stream = aiService.generateIdeaStream(environment.id, 'A', prefs, profile?.email);
+            for await (const idea of stream) {
+                setPreviewIdeas(prev => [...prev, idea]);
+            }
         } catch (err) {
             console.error('Error generating AI preview:', err);
             // Fallback mock if error
@@ -112,6 +113,18 @@ const Onboarding: React.FC = () => {
         } finally {
             setGeneratingPreview(false);
         }
+    };
+
+    const toggleArrayPref = (field: keyof UserPreferences, value: string) => {
+        setPrefs((prev) => {
+            const currentArray = (prev[field] as string[]) || [];
+            return {
+                ...prev,
+                [field]: currentArray.includes(value)
+                    ? currentArray.filter((v) => v !== value)
+                    : [...currentArray, value],
+            };
+        });
     };
 
     const toggleStyle = (style: string) => {
@@ -154,17 +167,8 @@ const Onboarding: React.FC = () => {
                     <Stack spacing={4}>
                         <Box>
                             <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <LocationIcon fontSize="small" color="primary" /> Standort & Reichweite
+                                <LocationIcon fontSize="small" color="primary" /> Reichweite
                             </Typography>
-                            <TextField
-                                fullWidth
-                                label="Deine Stadt"
-                                variant="outlined"
-                                value={prefs.city || ''}
-                                onChange={(e) => setPrefs({ ...prefs, city: e.target.value })}
-                                placeholder="z.B. Berlin"
-                                sx={{ mb: 2 }}
-                            />
                             <Typography variant="caption" color="text.secondary">Radius: {prefs.radiusKm} km</Typography>
                             <Slider
                                 value={prefs.radiusKm}
@@ -178,32 +182,17 @@ const Onboarding: React.FC = () => {
 
                         <Box>
                             <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>Wann plant ihr meistens?</Typography>
-                            <ToggleButtonGroup
-                                fullWidth
-                                value={prefs.planningDays}
-                                exclusive
-                                onChange={(_, v) => v && setPrefs({ ...prefs, planningDays: v })}
-                                color="primary"
-                            >
-                                <ToggleButton value="weekday">Wochentags</ToggleButton>
-                                <ToggleButton value="weekend">Wochenende</ToggleButton>
-                                <ToggleButton value="both">Beides</ToggleButton>
-                                <ToggleButton value="none">Keine</ToggleButton>
-                            </ToggleButtonGroup>
-                        </Box>
-
-                        <Box>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>Sprache der Vorschläge</Typography>
-                            <ToggleButtonGroup
-                                fullWidth
-                                value={prefs.language}
-                                exclusive
-                                onChange={(_, v) => v && setPrefs({ ...prefs, language: v })}
-                                color="primary"
-                            >
-                                <ToggleButton value="de">Deutsch</ToggleButton>
-                                <ToggleButton value="en">English</ToggleButton>
-                            </ToggleButtonGroup>
+                            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                {[{ v: 'weekday', l: 'Wochentags' }, { v: 'weekend', l: 'Wochenende' }].map(d => (
+                                    <Chip
+                                        key={d.v}
+                                        label={d.l}
+                                        onClick={() => toggleArrayPref('planningDays', d.v)}
+                                        color={prefs.planningDays.includes(d.v) ? 'primary' : 'default'}
+                                        variant={prefs.planningDays.includes(d.v) ? 'filled' : 'outlined'}
+                                    />
+                                ))}
+                            </Stack>
                         </Box>
                     </Stack>
                 )}
@@ -215,13 +204,13 @@ const Onboarding: React.FC = () => {
                                 <BudgetIcon fontSize="small" color="primary" /> Budget-Rahmen
                             </Typography>
                             <Stack direction="row" spacing={1}>
-                                {['low', 'medium', 'high', 'none'].map(b => (
+                                {['low', 'medium', 'high'].map(b => (
                                     <Chip
                                         key={b}
-                                        label={b === 'low' ? 'Günstig' : b === 'medium' ? 'Mittel' : b === 'high' ? 'Gehoben' : 'Keine'}
-                                        onClick={() => setPrefs({ ...prefs, budgetTier: b as any })}
-                                        color={prefs.budgetTier === b ? 'primary' : 'default'}
-                                        variant={prefs.budgetTier === b ? 'filled' : 'outlined'}
+                                        label={b === 'low' ? 'Günstig' : b === 'medium' ? 'Mittel' : 'Gehoben'}
+                                        onClick={() => toggleArrayPref('budgetTier', b)}
+                                        color={prefs.budgetTier.includes(b) ? 'primary' : 'default'}
+                                        variant={prefs.budgetTier.includes(b) ? 'filled' : 'outlined'}
                                         sx={{ flexGrow: 1, py: 2.5 }}
                                     />
                                 ))}
@@ -238,15 +227,14 @@ const Onboarding: React.FC = () => {
                                     { v: '60-120', l: '1-2 Std' },
                                     { v: '2-4h', l: '2-4 Std' },
                                     { v: 'half-day', l: 'Halber Tag' },
-                                    { v: 'full-day', l: 'Ganzer Tag' },
-                                    { v: 'none', l: 'Keine' }
+                                    { v: 'full-day', l: 'Ganzer Tag' }
                                 ].map(d => (
                                     <Chip
                                         key={d.v}
                                         label={d.l}
-                                        onClick={() => setPrefs({ ...prefs, durationTier: d.v as any })}
-                                        color={prefs.durationTier === d.v ? 'secondary' : 'default'}
-                                        variant={prefs.durationTier === d.v ? 'filled' : 'outlined'}
+                                        onClick={() => toggleArrayPref('durationTier', d.v)}
+                                        color={prefs.durationTier.includes(d.v) ? 'secondary' : 'default'}
+                                        variant={prefs.durationTier.includes(d.v) ? 'filled' : 'outlined'}
                                     />
                                 ))}
                             </Box>
@@ -254,18 +242,17 @@ const Onboarding: React.FC = () => {
 
                         <Box>
                             <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>Tageszeit</Typography>
-                            <ToggleButtonGroup
-                                fullWidth
-                                value={prefs.timeOfDay}
-                                exclusive
-                                onChange={(_, v) => v && setPrefs({ ...prefs, timeOfDay: v })}
-                                color="primary"
-                            >
-                                <ToggleButton value="morning">Morgens</ToggleButton>
-                                <ToggleButton value="afternoon">Mittags</ToggleButton>
-                                <ToggleButton value="evening">Abends</ToggleButton>
-                                <ToggleButton value="none">Keine</ToggleButton>
-                            </ToggleButtonGroup>
+                            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                {[{ v: 'morning', l: 'Morgens' }, { v: 'afternoon', l: 'Mittags' }, { v: 'evening', l: 'Abends' }].map(d => (
+                                    <Chip
+                                        key={d.v}
+                                        label={d.l}
+                                        onClick={() => toggleArrayPref('timeOfDay', d.v)}
+                                        color={prefs.timeOfDay.includes(d.v) ? 'primary' : 'default'}
+                                        variant={prefs.timeOfDay.includes(d.v) ? 'filled' : 'outlined'}
+                                    />
+                                ))}
+                            </Stack>
                         </Box>
                     </Stack>
                 )}
@@ -291,18 +278,18 @@ const Onboarding: React.FC = () => {
 
                         <Box>
                             <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>Indoor / Outdoor</Typography>
-                            <ToggleButtonGroup
-                                fullWidth
-                                value={prefs.indoorOutdoor}
-                                exclusive
-                                onChange={(_, v) => v && setPrefs({ ...prefs, indoorOutdoor: v })}
-                                color="primary"
-                            >
-                                <ToggleButton value="indoor" sx={{ gap: 1 }}><IndoorIcon fontSize="small" /> Indoor</ToggleButton>
-                                <ToggleButton value="outdoor" sx={{ gap: 1 }}><OutdoorIcon fontSize="small" /> Outdoor</ToggleButton>
-                                <ToggleButton value="mix" sx={{ gap: 1 }}><MixIcon fontSize="small" /> Mix</ToggleButton>
-                                <ToggleButton value="none">Keine</ToggleButton>
-                            </ToggleButtonGroup>
+                            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                {[{ v: 'indoor', l: 'Indoor', i: <IndoorIcon fontSize="small" /> }, { v: 'outdoor', l: 'Outdoor', i: <OutdoorIcon fontSize="small" /> }].map(d => (
+                                    <Chip
+                                        key={d.v}
+                                        icon={d.i}
+                                        label={d.l}
+                                        onClick={() => toggleArrayPref('indoorOutdoor', d.v)}
+                                        color={prefs.indoorOutdoor.includes(d.v) ? 'primary' : 'default'}
+                                        variant={prefs.indoorOutdoor.includes(d.v) ? 'filled' : 'outlined'}
+                                    />
+                                ))}
+                            </Stack>
                         </Box>
 
                         <Stack spacing={2}>

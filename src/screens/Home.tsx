@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Container, Typography, Card, CardContent, Chip, List, ListItem, ListItemText, Box, Divider, ListItemButton, Button, IconButton, Stack, Dialog, DialogTitle, DialogContent, CircularProgress, DialogActions, Snackbar, Alert } from '@mui/material';
-import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon, WhatsApp as WhatsAppIcon, Email as EmailIcon, Campaign as CampaignIcon, ContentCopy as CopyIcon, AutoAwesome as AIPreviewIcon, Casino as CasinoIcon } from '@mui/icons-material';
+import { ChevronRight as ChevronRightIcon, History as HistoryIcon, Settings as SettingsIcon, EmojiEvents as TrophyIcon, Celebration as PartyIcon, LocalActivity as ActivityIcon, CheckCircle as CheckCircleIcon, Star as StarIcon, StarOutline as StarOutlineIcon, WhatsApp as WhatsAppIcon, Email as EmailIcon, Campaign as CampaignIcon, ContentCopy as CopyIcon, AutoAwesome as AIPreviewIcon, Casino as CasinoIcon, Share as ShareIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { storage } from '../storage';
 import { useAuth } from '../context/useAuth';
@@ -9,6 +9,7 @@ import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/fire
 import type { LetterRound, Environment, UserPreferences } from '../types';
 import { RoundStatus } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
+import SocialShareDialog from '../components/SocialShareDialog';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
@@ -21,6 +22,7 @@ const Home: React.FC = () => {
     const [preferences, setPreferences] = useState<UserPreferences | null>(null);
 
     const [showRemindDialog, setShowRemindDialog] = useState(false);
+    const [shareRound, setShareRound] = useState<LetterRound | null>(null);
     const navigate = useNavigate();
 
     // Random mode state
@@ -331,6 +333,54 @@ const Home: React.FC = () => {
     const lastDrawnRound = lastDrawnLetter ? rounds.find(r => r.letter === lastDrawnLetter) : null;
     const allLettersDrawn = drawnOrder.length >= 26;
 
+    // Calculate target date based on rhythm setting
+    const getTargetDateText = () => {
+        if (!environment || !environment.eventInterval || !needsPlanning) return null;
+
+        let baselineDate = new Date(environment.createdAt);
+
+        // Find the last completed or planned date
+        const allPastRounds = isRandomMode
+            ? drawnOrder.map(l => rounds.find(r => r.letter === l)).filter(Boolean) as LetterRound[]
+            : rounds;
+
+        const sortedPastRounds = [...allPastRounds]
+            .filter(r => r.date && (r.status === RoundStatus.Done || r.status === RoundStatus.Planned))
+            .sort((a, b) => new Date(b.date!).getTime() - new Date(a.date!).getTime());
+
+        if (sortedPastRounds.length > 0 && sortedPastRounds[0].date) {
+            baselineDate = new Date(sortedPastRounds[0].date);
+        }
+
+        const targetDate = new Date(baselineDate);
+        const { value, unit } = environment.eventInterval;
+
+        if (unit === 'days') {
+            targetDate.setDate(targetDate.getDate() + value);
+        } else if (unit === 'weeks') {
+            targetDate.setDate(targetDate.getDate() + (value * 7));
+        } else if (unit === 'months') {
+            targetDate.setMonth(targetDate.getMonth() + value);
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        targetDate.setHours(0, 0, 0, 0);
+
+        const diffTime = targetDate.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) {
+            return { text: `Tipp: Euer Date ist seit ${Math.abs(diffDays)} Tag(en) überfällig!`, color: 'error.main' };
+        } else if (diffDays === 0) {
+            return { text: 'Tipp: Euer nächstes Date sollte heute stattfinden!', color: 'warning.main' };
+        } else {
+            return { text: `Tipp: Euer nächstes Date sollte in ${diffDays} Tag(en) stattfinden.`, color: 'text.secondary' };
+        }
+    };
+
+    const targetDateInfo = getTargetDateText();
+
     return (
         <Container maxWidth="sm" sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1.5, sm: 3 } }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
@@ -399,6 +449,12 @@ const Home: React.FC = () => {
                                             {drawnLetter}
                                         </Typography>
                                     </Box>
+                                    {targetDateInfo && (
+                                        <Typography variant="body2" sx={{ mt: 1, mb: 2, fontWeight: 600, bgcolor: 'rgba(255,255,255,0.2)', py: 0.5, px: 2, borderRadius: 2, display: 'inline-block' }}>
+                                            {targetDateInfo.text}
+                                        </Typography>
+                                    )}
+                                    <br />
                                     <Button
                                         variant="contained"
                                         size="large"
@@ -546,7 +602,7 @@ const Home: React.FC = () => {
                     position: 'relative',
                     overflow: 'visible'
                 }}>
-                    <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                    <CardContent sx={{ textAlign: 'center', py: { xs: 6, sm: 8 } }}>
                         <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
                             {needsPlanning ? 'Nächste Planung' : 'Nächstes Event'}
                         </Typography>
@@ -562,7 +618,7 @@ const Home: React.FC = () => {
                             </Box>
                         ) : (
                             <>
-                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)', fontSize: { xs: '1.75rem', sm: '2.5rem', md: '3rem' } }}>
                                     {currentRound.proposalText}
                                 </Typography>
                                 {currentRound.date && (
@@ -573,29 +629,43 @@ const Home: React.FC = () => {
                             </>
                         )}
 
-                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
+                        {needsPlanning && targetDateInfo && (
+                            <Typography variant="body2" sx={{ mt: 1, mb: 2, fontWeight: 600, bgcolor: 'rgba(255,255,255,0.2)', py: 0.5, px: 2, borderRadius: 2, display: 'inline-block' }}>
+                                {targetDateInfo.text}
+                            </Typography>
+                        )}
+
+                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1, flexWrap: 'wrap', gap: 1.5 }}>
                             {needsPlanning && !isProposer ? (
                                 <Button
                                     variant="contained" size="large" startIcon={<CampaignIcon />}
-                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: '#FF9800 !important', fontWeight: 900, px: 4, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: '#FF9800 !important', fontWeight: 900, px: { xs: 2.5, sm: 4 }, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
                                     onClick={() => setShowRemindDialog(true)}
                                 >Person erinnern</Button>
                             ) : (
                                 <Button
                                     variant="contained" size="large"
-                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important', fontWeight: 900, px: 4, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important', fontWeight: 900, px: { xs: 2.5, sm: 4 }, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
                                     onClick={() => navigate(`/letter/${currentRound.letter}`)}
                                 >{isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}</Button>
                             )}
                             {!needsPlanning && (
                                 <Button
                                     variant="outlined" size="large" startIcon={<CheckCircleIcon />}
-                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
+                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' }, px: { xs: 2, sm: 3 } }}
                                     onClick={() => handleMarkAsDone(currentRound)}
                                     disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
                                 >Als erledigt markieren</Button>
                             )}
                         </Stack>
+                        {currentRound.status === RoundStatus.Planned && (
+                            <IconButton
+                                onClick={(e) => { e.stopPropagation(); setShareRound(currentRound); }}
+                                sx={{ position: 'absolute', top: 12, right: 12, color: 'white', opacity: 0.8, '&:hover': { opacity: 1, bgcolor: 'rgba(255,255,255,0.1)' } }}
+                            >
+                                <ShareIcon />
+                            </IconButton>
+                        )}
                     </CardContent>
                 </Card>
             )}
@@ -611,7 +681,7 @@ const Home: React.FC = () => {
                     position: 'relative',
                     overflow: 'visible'
                 }}>
-                    <CardContent sx={{ textAlign: 'center', py: 5 }}>
+                    <CardContent sx={{ textAlign: 'center', py: { xs: 6, sm: 8 } }}>
                         <Typography variant="overline" sx={{ opacity: 0.9, fontWeight: 700, letterSpacing: '0.1em' }}>
                             {needsPlanning ? 'Nächste Planung' : 'Nächstes Event'}
                         </Typography>
@@ -627,7 +697,7 @@ const Home: React.FC = () => {
                             </Box>
                         ) : (
                             <>
-                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
+                                <Typography variant="h3" sx={{ my: 2, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.2)', fontSize: { xs: '1.75rem', sm: '2.5rem', md: '3rem' } }}>
                                     {currentRound.proposalText}
                                 </Typography>
                                 {currentRound.date && (
@@ -638,61 +708,43 @@ const Home: React.FC = () => {
                             </>
                         )}
 
-                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1 }}>
+                        {needsPlanning && targetDateInfo && (
+                            <Typography variant="body2" sx={{ mt: 1, mb: 2, fontWeight: 600, bgcolor: 'rgba(255,255,255,0.2)', py: 0.5, px: 2, borderRadius: 2, display: 'inline-block' }}>
+                                {targetDateInfo.text}
+                            </Typography>
+                        )}
 
+                        <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 3, position: 'relative', zIndex: 1, flexWrap: 'wrap', gap: 1.5 }}>
                             {needsPlanning && !isProposer ? (
                                 <Button
-                                    variant="contained"
-                                    size="large"
-                                    startIcon={<CampaignIcon />}
-                                    sx={{
-                                        backgroundColor: 'white !important',
-                                        backgroundImage: 'none !important',
-                                        color: '#FF9800 !important',
-                                        fontWeight: 900,
-                                        px: 4,
-                                        borderRadius: 3,
-                                        boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
-                                        textTransform: 'none',
-                                        '&:hover': { backgroundColor: '#f5f5f5 !important' }
-                                    }}
+                                    variant="contained" size="large" startIcon={<CampaignIcon />}
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: '#FF9800 !important', fontWeight: 900, px: { xs: 2.5, sm: 4 }, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
                                     onClick={() => setShowRemindDialog(true)}
-                                >
-                                    Person erinnern
-                                </Button>
+                                >Person erinnern</Button>
                             ) : (
                                 <Button
-                                    variant="contained"
-                                    size="large"
-                                    sx={{
-                                        backgroundColor: 'white !important',
-                                        backgroundImage: 'none !important',
-                                        color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important',
-                                        fontWeight: 900,
-                                        px: 4,
-                                        borderRadius: 3,
-                                        boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)',
-                                        textTransform: 'none',
-                                        '&:hover': { backgroundColor: '#f5f5f5 !important' }
-                                    }}
+                                    variant="contained" size="large"
+                                    sx={{ backgroundColor: 'white !important', backgroundImage: 'none !important', color: (needsPlanning ? '#d84315' : '#7C4DFF') + ' !important', fontWeight: 900, px: { xs: 2.5, sm: 4 }, borderRadius: 3, boxShadow: '0 4px 14px 0 rgba(0,0,0,0.1)', textTransform: 'none', '&:hover': { backgroundColor: '#f5f5f5 !important' } }}
                                     onClick={() => navigate(`/letter/${currentRound.letter}`)}
-                                >
-                                    {isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}
-                                </Button>
+                                >{isPlanned ? 'Details' : (currentRound.status === RoundStatus.Draft ? 'Entwurf bearbeiten' : 'Jetzt planen')}</Button>
                             )}
                             {!needsPlanning && (
                                 <Button
-                                    variant="outlined"
-                                    size="large"
-                                    startIcon={<CheckCircleIcon />}
-                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' } }}
+                                    variant="outlined" size="large" startIcon={<CheckCircleIcon />}
+                                    sx={{ color: 'white', borderColor: 'white', fontWeight: 700, '&:hover': { borderColor: '#f0f0f0', bgcolor: 'rgba(255,255,255,0.1)' }, px: { xs: 2, sm: 3 } }}
                                     onClick={() => handleMarkAsDone(currentRound)}
                                     disabled={(profile?.email?.toLowerCase().trim() !== currentRound.proposerUserId?.toLowerCase().trim()) || currentRound.status !== RoundStatus.Planned}
-                                >
-                                    Als erledigt markieren
-                                </Button>
+                                >Als erledigt markieren</Button>
                             )}
                         </Stack>
+                        {(currentRound.status === RoundStatus.Planned || currentRound.status === RoundStatus.Done) && (
+                            <IconButton
+                                onClick={(e) => { e.stopPropagation(); setShareRound(currentRound); }}
+                                sx={{ position: 'absolute', top: 12, right: 12, color: 'white', opacity: 0.8, '&:hover': { opacity: 1, bgcolor: 'rgba(255,255,255,0.1)' } }}
+                            >
+                                <ShareIcon />
+                            </IconButton>
+                        )}
                     </CardContent>
                 </Card>
             )}
@@ -798,8 +850,19 @@ const Home: React.FC = () => {
                                                 </Box>
                                             }
                                         />
-                                        {round.status === RoundStatus.Done ? <TrophyIcon color="success" /> :
-                                            round.status === RoundStatus.Planned ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
+                                        <Stack direction="row" alignItems="center" spacing={1}>
+                                            {(round.status === RoundStatus.Planned || round.status === RoundStatus.Done) && (
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => { e.stopPropagation(); setShareRound(round); }}
+                                                    sx={{ color: 'action.active' }}
+                                                >
+                                                    <ShareIcon fontSize="small" />
+                                                </IconButton>
+                                            )}
+                                            {round.status === RoundStatus.Done ? <TrophyIcon color="success" /> :
+                                                round.status === RoundStatus.Planned ? <PartyIcon color="primary" /> : <ChevronRightIcon color="action" />}
+                                        </Stack>
                                     </ListItemButton>
                                 </ListItem>
                                 {index < timelineRounds.length - 1 && <Divider />}
@@ -871,6 +934,13 @@ const Home: React.FC = () => {
             <Snackbar open={showRemindCopySuccess} autoHideDuration={3000} onClose={() => setShowRemindCopySuccess(false)}>
                 <Alert severity="success" sx={{ borderRadius: 2 }}>Link in die Zwischenablage kopiert!</Alert>
             </Snackbar>
+
+            <SocialShareDialog
+                open={!!shareRound}
+                onClose={() => setShareRound(null)}
+                round={shareRound}
+                profile={profile}
+            />
         </Container>
     );
 };

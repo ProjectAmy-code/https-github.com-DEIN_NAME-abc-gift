@@ -6,6 +6,9 @@ export interface UserProfile {
     environmentId: string;
     displayName: string;
     age?: number;
+    photoURL?: string;
+    aboutMe?: string;
+    city?: string;
 }
 
 export interface Environment {
@@ -18,6 +21,8 @@ export interface Environment {
     adminEmail: string; // The user who manages the environment
     abcMode?: 'sequential' | 'random'; // How letters are assigned
     drawnOrder?: string[]; // Letters already drawn in random mode, e.g. ['M', 'F', 'T']
+    eventInterval?: { value: number; unit: 'days' | 'weeks' | 'months' }; // Rhythm of the events
+    isPublic?: boolean; // Whether to show this journey on the public charts/ranking page
     createdAt: string;
 }
 
@@ -46,6 +51,11 @@ export interface LetterRound {
     feedback?: 'more' | 'never' | null;
     feedbackTags?: string[];
     doneAt?: string;
+    // Evaluation and Publication
+    evaluationText?: string;
+    imageUrl?: string;
+    imageUrls?: string[];
+    publishReview?: boolean;
     // Individual ratings
     ratings?: Record<string, number>;
     createdAt: string;
@@ -58,6 +68,10 @@ export interface AIIdea {
     description: string;
     whyItFits: string;
     tags: string[];
+    matchedPreferences?: string[];
+    getYourGuideSearch?: string;
+    getYourGuidePrice?: string;
+    getYourGuideCount?: number;
     metadata: {
         indoorOutdoor: 'indoor' | 'outdoor' | 'both';
         durationTier: UserPreferences['durationTier'];
@@ -88,19 +102,18 @@ export interface AppSettings {
 }
 
 export interface UserPreferences {
-    city?: string;
     radiusKm: number;
-    planningDays: 'weekday' | 'weekend' | 'both' | 'none';
-    language: 'de' | 'en';
-    budgetTier: 'low' | 'medium' | 'high' | 'none';
-    durationTier: '30-60' | '60-120' | '2-4h' | 'half-day' | 'full-day' | 'none';
-    timeOfDay: 'morning' | 'afternoon' | 'evening' | 'none';
+    planningDays: string[];
+    budgetTier: string[];
+    durationTier: string[];
+    timeOfDay: string[];
     styles: string[];
-    indoorOutdoor: 'indoor' | 'outdoor' | 'mix' | 'none';
+    indoorOutdoor: string[];
     rainRulePreferIndoor: boolean;
     carAvailable: boolean;
     kidsIncluded: boolean;
     noGos: string[];
     notes?: string;
     completedAt?: string;
+    aiIdeaCache?: Record<string, AIIdea[]>;
 }

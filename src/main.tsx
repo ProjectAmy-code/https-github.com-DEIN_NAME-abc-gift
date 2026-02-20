@@ -10,6 +10,7 @@ import Navigation from './components/Navigation'
 import Home from './screens/Home'
 import Settings from './screens/Settings'
 import LetterDetail from './screens/LetterDetail'
+import Ranking from './screens/Ranking'
 import Login from './screens/Login'
 import Register from './screens/Register'
 import ForgotPassword from './screens/ForgotPassword'
@@ -18,6 +19,7 @@ import Welcome from './screens/Welcome'
 import Onboarding from './screens/Onboarding'
 import { AuthProvider } from './context/AuthProvider'
 import { AuthGuard } from './components/AuthGuard'
+import AppFooter from './components/AppFooter'
 import './index.css'
 
 createRoot(document.getElementById('root')!).render(
@@ -36,10 +38,12 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/welcome" element={<AuthGuard><Welcome /></AuthGuard>} />
                 <Route path="/onboarding" element={<AuthGuard><Onboarding /></AuthGuard>} />
                 <Route path="/" element={<AuthGuard><Home /></AuthGuard>} />
+                <Route path="/ranking" element={<AuthGuard><Ranking /></AuthGuard>} />
                 <Route path="/letter/:letter" element={<AuthGuard><LetterDetail /></AuthGuard>} />
                 <Route path="/settings" element={<AuthGuard><Settings /></AuthGuard>} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+              <AppFooter />
               <Navigation />
             </Box>
           </BrowserRouter>

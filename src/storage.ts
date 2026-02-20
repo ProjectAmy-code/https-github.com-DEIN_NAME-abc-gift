@@ -131,6 +131,28 @@ export const storage = {
     async savePreferences(envId: string, preferences: UserPreferences, userEmail?: string): Promise<void> {
         const emailKey = userEmail ? userEmail.toLowerCase().trim().replace(/\./g, '_') : 'main';
         const prefKey = `${PREFERENCES_KEY_PREFIX}${envId}_${emailKey}`;
+
+        // Cache invalidation check
+        const oldPrefs = await this.getPreferences(envId, userEmail);
+        if (oldPrefs) {
+            const getCorePrefs = (p: UserPreferences) => ({
+                budgetTier: p.budgetTier,
+                durationTier: p.durationTier,
+                styles: p.styles,
+                noGos: p.noGos,
+                planningDays: p.planningDays,
+                radiusKm: p.radiusKm
+            });
+
+            const oldCore = JSON.stringify(getCorePrefs(oldPrefs));
+            const newCore = JSON.stringify(getCorePrefs(preferences));
+
+            if (oldCore !== newCore) {
+                console.log('[AI Cache] Core preferences changed. Clearing AI idea cache.');
+                preferences.aiIdeaCache = {};
+            }
+        }
+
         await localforage.setItem(prefKey, preferences);
         try {
             await setDoc(doc(db, 'environments', envId, 'preferences', emailKey), preferences);
